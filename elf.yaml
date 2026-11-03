@@ -1,0 +1,130 @@
+# A House Elves elf: what Elf Desk needs to install, set up and run Sessions. AGENTS.md says what each field means.
+# It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
+name: sessions
+title: Sessions
+version: 0.1.0
+author: "@phillip-kruger"
+description: Named chat sessions with a coding agent, each working in its own clone of a repo, that you can continue from any device signed in to your desk.
+main: Sessions.java
+config: ~/.config/sessions/config
+tools: [gh]
+builtin: true
+
+# What it reads and writes, in plain words: the desk shows these before you install it, so they must be true and
+# complete. Name every place outside this machine it reaches, and say when it waits for your click.
+reads:
+  - Your sessions and their turns, which it keeps on this machine.
+  - When you start a session, whether your gh account can see the repo you picked, on GitHub.
+  - Each message you send goes to the coding agent (the runner's, in its sandbox, with no GitHub credentials), which reads and changes its own clone of that repo, and can reach the internet.
+writes:
+  - Your sessions, on this machine. The agent's commits stay in its clone on this machine; nothing is pushed.
+
+settings:
+  - key: GITHUB_LOGIN
+    label: GitHub account
+    help: The account it checks you can read a repo with. Its token comes from gh (gh auth login).
+    kind: login
+    default: ${github-user}
+  - key: TAGS
+    label: Tags
+    help: The tags you can put on a session, to sort and filter them, like Personal, Work.
+    kind: words
+    default: "Personal, Work"
+    optional: true
+
+commands:
+  list:
+    label: List the sessions
+    args: []
+
+dry-run: list
+
+# Its tab (and dashboard card), drawn by ui/sessions.js in the desk's sandboxed frame. It reads only your sessions and
+# the agents' reports.
+tab:
+  page: ui/sessions.js
+  card: true
+data: [sessions, agents]
+# Each turn is an agent; when one ends, the runner calls agent-done with its id, which keeps its reply on the session.
+agents:
+  done: agent-done
+
+# Everything here changes only your sessions on this machine, or starts the sandboxed agent on your own words: no
+# asking first. Deleting a session asks.
+actions:
+  create:
+    label: Start a session
+    args: [--action=create]
+    ask: false
+    params:
+      # The Todo list (or another elf) may pick the id, to keep its half of a link to it.
+      id: {pattern: "(s[0-9]{10,16})?", optional: true}
+      name: {pattern: "\\P{Cntrl}{1,80}", max: 80}
+      repo: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", max: 140}
+      prompt: {pattern: "[\\s\\S]{1,20000}", max: 20000}
+      link: {pattern: "([a-z0-9][a-z0-9-]{0,40}:[A-Za-z0-9._-]{1,80})?", optional: true, max: 130}
+      linkTitle: {pattern: "\\P{Cntrl}{0,300}", optional: true, max: 300}
+      # Some of the tags in its settings, comma-separated.
+      tags: {pattern: "([A-Za-z0-9 ._*/+#&()-]{1,30}(,[A-Za-z0-9 ._*/+#&()-]{1,30}){0,9})?", optional: true, max: 320}
+  send:
+    label: Send a message
+    args: [--action=send]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      text: {pattern: "[\\s\\S]{1,20000}", max: 20000}
+  agent-done:
+    label: Keep a turn's reply
+    args: [--action=agent-done]
+    ask: false
+    params:
+      id: {pattern: "s[0-9]{10,16}-t[0-9]{1,5}"}
+  rename:
+    label: Rename a session
+    args: [--action=rename]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      name: {pattern: "\\P{Cntrl}{1,80}", max: 80}
+  archive:
+    label: Archive a session
+    args: [--action=archive]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      archived: {kind: bool}
+  tag:
+    label: Tag a session
+    args: [--action=tag]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      tags: {pattern: "([A-Za-z0-9 ._*/+#&()-]{1,30}(,[A-Za-z0-9 ._*/+#&()-]{1,30}){0,9})?", optional: true, max: 320}
+  edit-goal:
+    label: Edit a session's goal
+    args: [--action=edit-goal]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      goal: {pattern: "[\\s\\S]{1,20000}", max: 20000}
+  link:
+    label: Link a session to a todo
+    args: [--action=link]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      link: {pattern: "[a-z0-9][a-z0-9-]{0,40}:[A-Za-z0-9._-]{1,80}", max: 130}
+      linkTitle: {pattern: "\\P{Cntrl}{0,300}", optional: true, max: 300}
+  unlink:
+    label: Unlink a session's todo
+    args: [--action=unlink]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+  delete:
+    label: Delete a session
+    confirm: "Delete the session \"{name}\"? Its chat and its clone go, with any work not pushed."
+    args: [--action=delete]
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      name: {pattern: "\\P{Cntrl}{1,80}", max: 80}
