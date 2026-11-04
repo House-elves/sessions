@@ -14,8 +14,9 @@ your desk.
   lose it. **Edit goal** changes what the agent gets from then on; the first message stays as you sent it.
 - **A console:** an open session looks like Claude Code in a terminal and fills the desk's window; only the
   conversation scrolls. Type straight into the prompt: Enter sends, Ctrl+Enter starts a new line, Esc interrupts.
-  Paste a screenshot, drop files, or attach them: images go to Claude Code with your message (up to 4, not to IBM
-  Bob), and text files (up to 100 KB each) go into the message. PDF and Word files aren't supported yet.
+  Paste a screenshot, drop files, or attach them: images and PDFs go to Claude Code with your message (up to 4
+  together, a PDF up to 3 MB; not to IBM Bob), and text files (up to 100 KB each) and Word files (.docx, up to 3 MB,
+  read as text with tables as rows) go into the message. An old .doc file isn't read: save it as .docx or PDF.
 - **Chat:** each message you send is one turn. The tab shows what the agent is doing as it works (its text, and
   `▸ Bash: mvn test` for each step), then its reply. **Stop** ends a turn early.
 - **Your choice of agent:** Claude Code or IBM Bob, picked on the New session form, with your default in Settings

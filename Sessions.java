@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
  * of the session's repo kept for that session alone (checkout slot), resuming the session's agent so it keeps its
  * context. The session's first message (its goal) goes with every turn. Without --action it lists the sessions.
  */
-@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.6.1", description = "Coding-agent sessions for Elf Desk")
+@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.7.0", description = "Coding-agent sessions for Elf Desk")
 public class Sessions implements Callable<Integer> {
 
     static final ObjectMapper JSON = new ObjectMapper();
@@ -50,6 +50,9 @@ public class Sessions implements Callable<Integer> {
     /** A text file goes into the message: at most this much each, and all of a message's together. */
     static final int MAX_DOC_CHARS = 100_000, MAX_DOCS_CHARS = 150_000;
     static final int MAX_FILES = 10;
+    /** A PDF (shown to Claude whole) or a Word file (read as text): at most this big, so about 4 MB as a data URL. */
+    static final int MAX_DOCUMENT_BYTES = 3_000_000;
+    static final String DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     /** Outside the data folders the tab reads: one action at a time changes the sessions. */
     static final Path LOCK = Config.DIR.resolve("sessions.lock");
     static final Pattern ID = Pattern.compile("s[0-9]{10,16}");
@@ -285,7 +288,7 @@ public class Sessions implements Callable<Integer> {
         String session = in.path("session").asText("");
         if (!session.equals("new")) load(session); // it must be there
         String kind = in.path("kind").asText("");
-        if (!List.of("image", "text").contains(kind)) throw new IllegalArgumentException("A file is an image or text");
+        if (!List.of("image", "text", "pdf", "docx").contains(kind)) throw new IllegalArgumentException("A file is an image, text, a PDF or a Word file");
         Files.createDirectories(ATTACHMENTS);
         String id = in.path("file").asText("");
         if (id.isEmpty()) {
@@ -305,7 +308,7 @@ public class Sessions implements Callable<Integer> {
         }
         Path part = ATTACHMENTS.resolve(session + "-" + id + ".part");
         String data = in.path("data").asText("");
-        long max = kind.equals("image") ? MAX_IMAGE_CHARS : MAX_DOC_CHARS * 4L;
+        long max = kind.equals("image") ? MAX_IMAGE_CHARS : kind.equals("text") ? MAX_DOC_CHARS * 4L : MAX_DOCUMENT_BYTES / 3L * 4 + 200;
         if ((Files.exists(part) ? Files.size(part) : 0) + data.length() > max) {
             Files.deleteIfExists(part);
             throw new IllegalArgumentException(kind.equals("image") ? "That image is too big" : "That file is too long to put in a message");
@@ -316,7 +319,23 @@ public class Sessions implements Callable<Integer> {
         Files.deleteIfExists(part);
         Path meta = ATTACHMENTS.resolve(session + "-" + id + ".meta.json");
         ObjectNode m = (ObjectNode) JSON.readTree(meta.toFile());
-        if (kind.equals("image")) {
+        if (kind.equals("pdf")) {
+            byte[] bytes = dataUrl(all, "application/pdf");
+            if (!starts(bytes, 0, '%', 'P', 'D', 'F', '-') || bytes.length > MAX_DOCUMENT_BYTES) throw new IllegalArgumentException("That isn't a PDF of at most 3 MB");
+            String file = session + "-" + id + ".pdf";
+            Files.write(ATTACHMENTS.resolve(file), bytes);
+            m.put("file", file).put("type", "application/pdf");
+        } else if (kind.equals("docx")) {
+            // Claude has no Word reader: its text goes into the message, as a text file's does.
+            byte[] bytes = dataUrl(all, DOCX);
+            if (bytes.length > MAX_DOCUMENT_BYTES) throw new IllegalArgumentException("That Word file is too big");
+            String text = docxText(bytes);
+            if (text.isBlank()) throw new IllegalArgumentException("There's no text in that Word file");
+            if (text.length() > MAX_DOC_CHARS) throw new IllegalArgumentException("That Word file is too long to put in a message");
+            String file = session + "-" + id + ".txt";
+            Files.writeString(ATTACHMENTS.resolve(file), text, StandardCharsets.UTF_8);
+            m.put("kind", "text").put("from", "docx").put("file", file).put("type", "text/plain");
+        } else if (kind.equals("image")) {
             Matcher d = Pattern.compile("data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)").matcher(all);
             if (!d.matches()) throw new IllegalArgumentException("That isn't a PNG, JPEG, GIF or WebP image");
             byte[] bytes = java.util.Base64.getDecoder().decode(d.group(2));
@@ -333,6 +352,97 @@ public class Sessions implements Callable<Integer> {
         }
         write(meta, m);
         return JSON.createObjectNode().put("id", id).put("kept", true).put("file", m.path("file").asText());
+    }
+
+    /** The bytes of a data URL of that type (what the tab read the file as). */
+    static byte[] dataUrl(String url, String type) {
+        String head = "data:" + type + ";base64,";
+        if (!url.startsWith(head)) throw new IllegalArgumentException("That isn't the kind of file it says");
+        try {
+            return java.util.Base64.getDecoder().decode(url.substring(head.length()));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("That file didn't arrive whole: attach it again");
+        }
+    }
+
+    /**
+     * A Word (.docx) file's text: its paragraphs one per line, a table's rows as cells joined by " | ". It's a zip of XML:
+     * only word/document.xml is read, at most 20 MB of it unpacked, and the XML may not declare a DOCTYPE (so it can't
+     * pull in or expand anything).
+     */
+    static String docxText(byte[] bytes) throws IOException {
+        byte[] xml = null;
+        try (var zip = new java.util.zip.ZipInputStream(new java.io.ByteArrayInputStream(bytes))) {
+            for (var e = zip.getNextEntry(); e != null; e = zip.getNextEntry()) {
+                if (!e.getName().equals("word/document.xml")) continue;
+                xml = zip.readNBytes(20_000_001);
+                if (xml.length > 20_000_000) throw new IllegalArgumentException("That Word file is too big");
+                break;
+            }
+        } catch (java.util.zip.ZipException e) {
+            throw new IllegalArgumentException("That isn't a Word (.docx) file");
+        }
+        if (xml == null) throw new IllegalArgumentException("That isn't a Word (.docx) file");
+        org.w3c.dom.Document doc;
+        try {
+            var f = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            f.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            f.setExpandEntityReferences(false);
+            f.setNamespaceAware(true);
+            var b = f.newDocumentBuilder();
+            b.setErrorHandler(null);
+            doc = b.parse(new java.io.ByteArrayInputStream(xml));
+        } catch (Exception e) {
+            throw new IllegalArgumentException("That Word file couldn't be read: " + e.getMessage());
+        }
+        StringBuilder out = new StringBuilder();
+        var bodies = doc.getElementsByTagNameNS(W, "body");
+        if (bodies.getLength() > 0) block((org.w3c.dom.Element) bodies.item(0), out);
+        return out.toString().replaceAll("\\n{3,}", "\n\n").strip();
+    }
+
+    static final String W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /** A body's (or a cell's) paragraphs and tables, in order. */
+    static void block(org.w3c.dom.Element parent, StringBuilder out) {
+        for (var n = parent.getFirstChild(); n != null; n = n.getNextSibling()) {
+            if (!(n instanceof org.w3c.dom.Element e) || !W.equals(e.getNamespaceURI())) continue;
+            switch (e.getLocalName()) {
+                case "p" -> out.append(paragraph(e)).append('\n');
+                case "tbl" -> {
+                    for (var r = e.getFirstChild(); r != null; r = r.getNextSibling()) {
+                        if (!(r instanceof org.w3c.dom.Element row) || !"tr".equals(row.getLocalName())) continue;
+                        List<String> cells = new ArrayList<>();
+                        for (var c = row.getFirstChild(); c != null; c = c.getNextSibling()) {
+                            if (!(c instanceof org.w3c.dom.Element cell) || !"tc".equals(cell.getLocalName())) continue;
+                            StringBuilder t = new StringBuilder();
+                            block(cell, t);
+                            cells.add(t.toString().strip().replace('\n', ' '));
+                        }
+                        out.append(String.join(" | ", cells)).append('\n');
+                    }
+                    out.append('\n');
+                }
+                case "sdt", "sdtContent", "customXml", "ins", "smartTag" -> block(e, out);
+                default -> { }
+            }
+        }
+    }
+
+    /** A paragraph's text: its runs' text, tabs and line breaks (deleted text left out). */
+    static String paragraph(org.w3c.dom.Element p) {
+        StringBuilder s = new StringBuilder();
+        var all = p.getElementsByTagNameNS(W, "*");
+        for (int i = 0; i < all.getLength(); i++) {
+            var e = (org.w3c.dom.Element) all.item(i);
+            switch (e.getLocalName()) {
+                case "t" -> s.append(e.getTextContent());
+                case "tab" -> s.append('\t');
+                case "br", "cr" -> s.append('\n');
+                default -> { }
+            }
+        }
+        return s.toString();
     }
 
     /** What the bytes are, by how they start: image/png, image/jpeg, image/gif, image/webp, or null. */
@@ -420,9 +530,10 @@ public class Sessions implements Callable<Integer> {
         StringBuilder docs = new StringBuilder();
         for (ObjectNode f : files) {
             Path p = ATTACHMENTS.resolve(f.path("file").asText());
-            if (f.path("kind").asText().equals("image")) {
-                if (bob) throw new IllegalArgumentException("IBM Bob isn't shown images: attach text files only");
-                if (images.size() >= MAX_IMAGES) throw new IllegalArgumentException("A message takes at most " + MAX_IMAGES + " images");
+            if (List.of("image", "pdf").contains(f.path("kind").asText())) {
+                if (bob) throw new IllegalArgumentException("IBM Bob isn't shown images or PDFs: attach text or Word files");
+                if (images.size() >= MAX_IMAGES) throw new IllegalArgumentException("A message takes at most " + MAX_IMAGES + " images and PDFs");
+                if (f.path("kind").asText().equals("pdf") && !runnerAtLeast(0, 50)) throw new IllegalStateException("Showing PDFs needs runner 0.50.0 or later: update the desk");
                 images.addObject().put("type", f.path("type").asText())
                         .put("data", java.util.Base64.getEncoder().encodeToString(Files.readAllBytes(p)));
             } else {

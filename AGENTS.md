@@ -226,7 +226,8 @@ other's. Pass the last answer's `session` to resume it. The
 tab removes a slot it's done with with `elf.removeSlot(repo, slot)`, refused while one of its agents works there.
 `images` (runner 0.42.0 and later, which tells an action its version in `ELF_RUNNER_VERSION`) shows the agent up to 4
 images with its prompt, such as screenshots you pasted: `[{"type": "image/png", "data": "<base64>"}]`, each a PNG,
-JPEG, GIF or WebP of at most 3.75 MB, which the safety check reads too. Not with `web`. The desk takes at most 64 KB
+JPEG, GIF or WebP of at most 3.75 MB, which the safety check reads too. From runner 0.50.0 one may be a PDF
+(`application/pdf`, at most 10 MB), which Claude reads whole. Not with `web`. The desk takes at most 64 KB
 at a time from a tab, so a tab sends an image to its elf in parts; Elf Maker's `attach` action is the example. Its report is in
 `agents/<id>.json`, and the tab reads it with `elf.agent(id)`. `zulip-digest`'s `Research.java` is the example to
 copy. An agent's commits stay in the runner's worktree until the elf asks for a push on your click; that's in

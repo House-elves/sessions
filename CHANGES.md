@@ -1,5 +1,12 @@
 # What's new
 
+## 0.7.0
+
+- New: attach PDFs and Word files. A PDF goes to Claude Code whole, so it reads the text, tables and pictures (up to
+  3 MB, and with images up to 4 per message; runner 0.50.0). A Word file (.docx) goes into your message as its text,
+  with its tables as rows, for Claude Code and IBM Bob alike. An old .doc file says to save it as .docx or PDF.
+- New: a big file's chip shows how much of it has been sent.
+
 ## 0.6.1
 
 - Fixed: the tag filter in an open session no longer takes the whole line, so session names show in full.

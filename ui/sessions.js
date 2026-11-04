@@ -32,6 +32,29 @@ const MAX_FILES = 10;
 const MAX_SIDE = 1568;
 const MAX_IMAGE_CHARS = 600_000;
 const MAX_DOC_BYTES = 100_000;
+// A PDF (Claude reads it whole: text, tables and pictures) or a Word file (its text goes in the message).
+const MAX_DOCUMENT_BYTES = 3_000_000;
+const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+/** What a file is to a message: an image, a PDF, a Word file, or text. */
+function kindOf(file) {
+    const name = (file.name ?? '').toLowerCase();
+    if (file.type.startsWith('image/')) return 'image';
+    if (file.type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+    if (file.type === DOCX || name.endsWith('.docx')) return 'docx';
+    if (file.type === 'application/msword' || name.endsWith('.doc')) return 'doc';
+    return 'text';
+}
+
+/** A file as a data URL of the type it should be. */
+function dataUrl(file, type) {
+    return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).replace(/^data:[^;,]*(;base64)?,/, `data:${type};base64,`));
+        r.onerror = () => reject(new Error('couldn\'t read it'));
+        r.readAsDataURL(file);
+    });
+}
 const PART = 60_000;
 
 /** An image file as a data URL that fits: PNG if it's small enough (sharpest for text), else WebP or JPEG, smaller. */
@@ -664,7 +687,7 @@ class SessionsTab extends LitElement {
         const n = totals(s);
         return html`<div class="t-input">
             ${files.length ? html`<div class="t-files">${files.map((f, k) => html`<span class="t-file ${f.status}">
-                ${f.kind === 'image' ? `[Image #${k + 1}]` : `[${f.name}]`}${f.status === 'sending' ? ' …' : f.status === 'failed' ? ` ✗ ${f.error}` : ''}
+                ${f.kind === 'image' ? `[Image #${k + 1}]` : `[${f.name}]`}${f.status === 'sending' ? ` ${f.sent ?? 0}%` : f.status === 'failed' ? ` ✗ ${f.error}` : ''}
                 <button class="t-btn" title="Take it off" @click=${() => { this._files = files.filter(x => x !== f); }}>×</button></span>`)}</div>` : nothing}
             <div class="t-box ${busy ? 'busy' : ''}"><span class="t-prompt">&gt;</span>
                 <textarea class="t-area" name="text" rows="1" aria-label="Your message" maxlength="20000" spellcheck="false"
@@ -673,7 +696,7 @@ class SessionsTab extends LitElement {
                     @keydown=${e => this._key(e, s, busy)} @paste=${e => this._paste(e, s)}></textarea>
             </div>
             <div class="t-foot">
-                <span>enter to send · ctrl+enter new line · paste or drop images and text files ·
+                <span>enter to send · ctrl+enter new line · paste or drop images, PDFs, Word and text files ·
                     <button class="t-btn" @click=${() => this.renderRoot.querySelector('.t-pick')?.click()}>attach</button>
                     ${busy ? html` · <button class="t-btn" @click=${() => this._stop(s)}>esc to interrupt</button>` : nothing}</span>
                 <span class="t-grow"></span>
@@ -737,10 +760,14 @@ class SessionsTab extends LitElement {
     /** Each file starts going to the elf at once (in parts), so it's ready by the time you send. */
     _addFiles(list, s) {
         for (const file of list) {
-            const f = { name: file.name || (file.type.startsWith('image/') ? 'image' : 'file'),
-                kind: file.type.startsWith('image/') ? 'image' : 'text', status: 'sending' };
-            if (s.agent === 'bob' && f.kind === 'image') {
-                this._error = 'IBM Bob isn\'t shown images: attach text files only.';
+            const kind = kindOf(file);
+            if (kind === 'doc') {
+                this._error = `${file.name} is an old Word file (.doc): save it as .docx, or as a PDF, and attach that.`;
+                continue;
+            }
+            const f = { name: file.name || (kind === 'image' ? 'image' : 'file'), kind, status: 'sending', sent: 0 };
+            if (s.agent === 'bob' && (kind === 'image' || kind === 'pdf')) {
+                this._error = 'IBM Bob isn\'t shown images or PDFs: attach text or Word files.';
                 continue;
             }
             if ((this._files ?? []).length >= MAX_FILES) {
@@ -759,16 +786,22 @@ class SessionsTab extends LitElement {
     async _upload(file, f, session) {
         let data;
         if (f.kind === 'image') data = await fit(file);
-        else {
+        else if (f.kind === 'pdf' || f.kind === 'docx') {
+            if (file.size > MAX_DOCUMENT_BYTES) throw new Error('bigger than 3 MB');
+            data = await dataUrl(file, f.kind === 'pdf' ? 'application/pdf' : DOCX);
+        } else {
             if (file.size > MAX_DOC_BYTES) throw new Error('too long to put in a message');
             data = await file.text();
-            if (data.includes('\u0000')) throw new Error('not a text file (PDF and Word aren\'t supported yet)');
+            if (data.includes('\u0000')) throw new Error('not a text file');
         }
         let id = '';
         for (let at = 0; at < Math.max(1, data.length); at += PART) {
             const done = at + PART >= data.length;
             const r = await elf.act('attach', { session, ...(id ? { file: id } : {}), kind: f.kind, name: f.name.slice(0, 120), data: data.slice(at, at + PART), done });
             id = r.id;
+            // A big file takes a while (the desk takes 60 KB at a time): its chip says how far it is.
+            f.sent = Math.min(100, Math.round((at + PART) / data.length * 100));
+            this._files = [...this._files];
         }
         f.id = id;
         f.status = 'ready';
