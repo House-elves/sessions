@@ -23,6 +23,9 @@ your desk.
   elf, and a todo can start a session (see Links).
 - **Tags:** put tags on a session, from the ones in its settings (`TAGS`, "Personal, Work" to start), and show only
   the sessions with one tag. The tag you show is remembered per browser.
+- **Its numbers:** the model (like Opus 5.5), what the session has cost (dollars for Claude Code, Bobcoins for IBM
+  Bob), how long its agent has worked over all its turns, and how full its context is after the last turn, as a
+  percentage of the model's context window (marked from 80%, when compaction is near).
 - **Tabs you manage:** rename, archive (hidden, kept) and delete (its chat and its clone go).
 
 ## What it reads and writes

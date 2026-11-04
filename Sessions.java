@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
  * of the session's repo kept for that session alone (checkout slot), resuming the session's agent so it keeps its
  * context. The session's first message (its goal) goes with every turn. Without --action it lists the sessions.
  */
-@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.4.0", description = "Coding-agent sessions for Elf Desk")
+@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.5.0", description = "Coding-agent sessions for Elf Desk")
 public class Sessions implements Callable<Integer> {
 
     static final ObjectMapper JSON = new ObjectMapper();
@@ -369,7 +369,21 @@ public class Sessions implements Callable<Integer> {
                     }
                 }
                 if (a.path("cost").isNumber()) turn.put("cost", a.path("cost").asDouble());
-                if (a.path("bobcoins").isNumber()) turn.put("bobcoins", a.path("bobcoins").asDouble());
+                // Bob says what its task has cost so far: the turn's own is what it added.
+                if (a.path("bobcoins").isNumber()) {
+                    double total = a.path("bobcoins").asDouble();
+                    turn.put("bobcoins", Math.max(0, total - s.path("bobcoinsTotal").asDouble(0)));
+                    s.put("bobcoinsTotal", total);
+                }
+                // The model it ran as, how long it took, and how full its context is now (runner 0.49.0).
+                if (a.path("model").isTextual()) {
+                    turn.put("model", oneLine(a.path("model").asText(), 80));
+                    s.put("model", turn.path("model").asText());
+                }
+                if (a.path("durationMs").isNumber()) turn.put("durationMs", a.path("durationMs").asLong());
+                if (a.path("context").path("window").asLong() > 0) {
+                    turn.put("contextUsed", a.path("context").path("used").asLong()).put("contextWindow", a.path("context").path("window").asLong());
+                }
                 turn.put("finished", a.path("finished").asText(Instant.now().toString()));
             } catch (IOException e) {
                 // Read again next time: it may be half way through being written.

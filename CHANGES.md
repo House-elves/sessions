@@ -1,5 +1,11 @@
 # What's new
 
+## 0.5.0
+
+- New: a session shows its model (like Opus 5.5), what it has cost, how long its agent has worked, and how full its
+  context is, as a percentage; each turn shows how long it took and its model. A working turn shows how long it's
+  been going. (Runner 0.49.0; turns from before show their cost only.)
+
 ## 0.4.0
 
 - New: a session started from a todo, or from one step of its checklist, starts with the todo's description,

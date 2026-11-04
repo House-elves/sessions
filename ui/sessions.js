@@ -27,6 +27,38 @@ async function loadSessions() {
 const working = s => (s.turns ?? []).some(t => t.status === 'running');
 const AGENT_NAMES = { claude: 'Claude Code', bob: 'IBM Bob', codex: 'Codex', pi: 'pi' };
 const agentName = id => AGENT_NAMES[id] ?? 'Claude Code';
+
+/** A model's id as people say it: claude-opus-5-5 is Opus 5.5, with (1M) for a 1M-context variant. */
+function modelName(id) {
+    const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/.exec(id ?? '');
+    if (!m) return id ?? '';
+    return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}${m[4] ? ' (1M)' : ''}`;
+}
+
+/** A time it took: 45s, 3m 20s, 1h 05m. */
+function took(ms) {
+    const s = Math.round((ms ?? 0) / 1000);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+    return `${Math.floor(s / 3600)}h ${String(Math.floor(s / 60) % 60).padStart(2, '0')}m`;
+}
+
+/**
+ * A session's numbers: what it has cost (dollars for Claude Code, Bobcoins for IBM Bob), how long its agent has worked,
+ * the model of its last turn, and how full its context is after it.
+ */
+function totals(s) {
+    const turns = s.turns ?? [];
+    const sum = k => turns.reduce((n, t) => n + (typeof t[k] === 'number' ? t[k] : 0), 0);
+    const last = [...turns].reverse().find(t => t.contextWindow > 0);
+    return {
+        cost: turns.some(t => typeof t.cost === 'number') ? sum('cost') : null,
+        bobcoins: turns.some(t => typeof t.bobcoins === 'number') ? sum('bobcoins') : null,
+        ms: turns.some(t => typeof t.durationMs === 'number') ? sum('durationMs') : null,
+        model: [...turns].reverse().find(t => t.model)?.model ?? s.model ?? null,
+        context: last ? Math.min(100, Math.round(last.contextUsed / last.contextWindow * 100)) : null,
+    };
+}
 /** The tags in its settings (TAGS), as spelled there. */
 const settingsTags = values => [...new Set((values?.TAGS ?? '').split(',').map(t => t.trim()).filter(Boolean))];
 const tagged = (s, tag) => !tag || (s.tags ?? []).includes(tag);
@@ -376,7 +408,7 @@ class SessionsTab extends LitElement {
                 </div>
             </div>
             <div class="meta">
-                <span>${s.repo}</span><span>${agentName(s.agent)}</span><span>Started ${ago(s.created)}</span>
+                <span>${s.repo}</span>${this._numbers(s)}<span>Started ${ago(s.created)}</span>
                 ${this._tagsOf(s)}
                 ${s.link ? html`<span>Linked to <a href="#" @click=${e => { e.preventDefault(); this._openLink(s.link); }}>${s.link.title || s.link.ref}</a>
                     <button class="sm quiet" @click=${() => this._act('unlink', { session: s.id }, 'Couldn\'t unlink it')}>Unlink</button></span>`
@@ -439,12 +471,24 @@ class SessionsTab extends LitElement {
         </div>`;
     }
 
+    /** The model, then what it has cost, how long it has worked and how full its context is. */
+    _numbers(s) {
+        const n = totals(s);
+        return html`<span title=${n.model ?? ''}>${n.model ? modelName(n.model) : agentName(s.agent)}</span>
+            ${n.cost !== null ? html`<span title="What its turns have cost, at list price">$${n.cost.toFixed(2)}</span>` : nothing}
+            ${n.bobcoins !== null ? html`<span>${n.bobcoins.toFixed(2)} Bobcoins</span>` : nothing}
+            ${n.ms !== null ? html`<span title="How long the agent has worked, over all its turns">${took(n.ms)} working</span>` : nothing}
+            ${n.context !== null ? html`<span class=${n.context >= 80 ? 'chip warn' : ''}
+                title="How full the model's context window is after the last turn; a long session gets compacted as it fills">${n.context}% context</span>` : nothing}`;
+    }
+
     _turn(t) {
         const live = this._live[t.agent];
         const shown = this._lines[t.agent];
         return html`<div class="you">${t.you}</div>
             <div class="agent">
-                ${t.status === 'running' ? html`<div class="row">${spinner}<span>${live?.status === 'queued' ? 'Waiting for the runner…' : 'Working…'}</span>
+                ${t.status === 'running' ? html`<div class="row">${spinner}<span>${live?.status === 'queued' ? 'Waiting for the runner…'
+                        : `Working${live?.started ? `, ${took(Date.now() - Date.parse(live.started))}` : ''}…`}</span>
                         <button class="sm quiet" @click=${() => elf.cancelAgent(t.agent).catch(e => { this._error = e.message; })}>Stop</button></div>
                     ${live?.lines?.length ? html`<div class="lines">${live.lines.slice(-40).join('\n')}</div>` : nothing}`
                 : t.status === 'done' ? html`<div class="md">${markdown(t.reply ?? '')}</div>`
@@ -452,8 +496,10 @@ class SessionsTab extends LitElement {
                     it won't remember this turn.</p>`
                 : html`<p class="error">It didn't answer: ${t.error ?? 'it failed'}</p>`}
                 ${t.status !== 'running' ? html`<div class="row when">
-                    <span>${ago(t.finished ?? t.at)}${typeof t.cost === 'number' ? ` · $${t.cost.toFixed(2)}` : ''}${
-                        typeof t.bobcoins === 'number' ? ` · ${t.bobcoins.toFixed(2)} Bobcoins` : ''}</span>
+                    <span>${ago(t.finished ?? t.at)}${typeof t.durationMs === 'number' ? ` · took ${took(t.durationMs)}` : ''}${
+                        typeof t.cost === 'number' ? ` · $${t.cost.toFixed(2)}` : ''}${
+                        typeof t.bobcoins === 'number' ? ` · ${t.bobcoins.toFixed(2)} Bobcoins` : ''}${
+                        t.model ? ` · ${modelName(t.model)}` : ''}</span>
                     <button class="sm quiet" @click=${() => this._toggleLines(t)}>${shown ? 'Hide what it did' : 'What it did'}</button></div>
                     ${shown ? html`<div class="lines">${shown.length ? shown.join('\n') : 'Nothing kept.'}</div>` : nothing}` : nothing}
             </div>`;
