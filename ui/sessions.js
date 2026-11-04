@@ -172,7 +172,7 @@ class SessionsTab extends LitElement {
         .term b { font-weight: 600; }
         .t-head { padding: 6px 12px 4px; border-bottom: 1px solid var(--t-line); display: grid; gap: 4px; }
         .t-tabs { display: flex; gap: 4px; align-items: center; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
-        .t-tabs a { color: var(--t-dim); text-decoration: none; padding: 2px 10px; border-radius: 6px; max-width: 18rem;
+        .t-tabs a { color: var(--t-dim); text-decoration: none; padding: 2px 10px; border-radius: 6px; max-width: 24rem; flex: none;
             overflow: hidden; text-overflow: ellipsis; }
         .t-tabs a:hover { color: var(--t-ink); }
         .t-tabs a.on { color: var(--t-ink); background: var(--t-bg2); }
@@ -191,7 +191,8 @@ class SessionsTab extends LitElement {
         .t-btn:hover { color: var(--t-ink); }
         .t-btn:focus-visible { outline: 1px solid var(--t-acc); }
         .t-btn[disabled] { opacity: .5; cursor: default; }
-        .t-select { font: inherit; color: var(--t-dim); background: var(--t-bg); border: 1px solid var(--t-line); border-radius: 6px; padding: 0 4px; }
+        .term .t-select { font: inherit; color: var(--t-dim); background: var(--t-bg); border: 1px solid var(--t-line); border-radius: 6px;
+            padding: 0 4px; width: auto; flex: none; box-shadow: none; }
         .t-inline { display: inline-flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
         .t-inline input:not([type=checkbox]) { font: inherit; color: var(--t-ink); background: var(--t-bg2); border: 1px solid var(--t-line);
             border-radius: 4px; padding: 0 6px; width: auto; }

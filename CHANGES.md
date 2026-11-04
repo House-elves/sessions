@@ -1,5 +1,9 @@
 # What's new
 
+## 0.6.1
+
+- Fixed: the tag filter in an open session no longer takes the whole line, so session names show in full.
+
 ## 0.6.0
 
 - New: an open session is a console, as close to Claude Code's as a browser gets: its colours and monospace, the
