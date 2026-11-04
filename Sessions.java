@@ -87,8 +87,28 @@ public class Sessions implements Callable<Integer> {
     // ---- the tab's actions ----
 
     int action(Config config) {
-        try (FileChannel ch = lockFile(); FileLock lock = ch.lock()) {
+        try {
             JsonNode in = JSON.readTree(System.in);
+            // Asking GitHub can take a while: done before taking the lock, so it never holds up the other actions.
+            if (action.equals("create")) {
+                String repo = in.path("repo").asText("").strip();
+                if (!REPO.matcher(repo).matches()) throw new IllegalArgumentException("Pick a repo, like owner/name");
+                checkRepo(config, repo);
+            }
+            try (FileChannel ch = lockFile(); FileLock lock = ch.lock()) {
+                return act(config, in);
+            }
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            System.err.println(e.getMessage());
+            return 1;
+        } catch (Exception e) {
+            System.err.println("Couldn't do it: " + e.getMessage());
+            return 1;
+        }
+    }
+
+    int act(Config config, JsonNode in) throws Exception {
+        {
             JsonNode answer = switch (action) {
                 case "create" -> create(config, in);
                 case "send" -> send(in);
@@ -105,12 +125,6 @@ public class Sessions implements Callable<Integer> {
             // The last line printed is the action's answer to the tab (or, with "agent", to the runner first).
             System.out.println(answer);
             return 0;
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            System.err.println(e.getMessage());
-            return 1;
-        } catch (Exception e) {
-            System.err.println("Couldn't do it: " + e.getMessage());
-            return 1;
         }
     }
 
@@ -134,7 +148,6 @@ public class Sessions implements Callable<Integer> {
         if (name.isEmpty()) throw new IllegalArgumentException("Give the session a name");
         if (!REPO.matcher(repo).matches()) throw new IllegalArgumentException("Pick a repo, like owner/name");
         if (prompt.isEmpty() || prompt.length() > MAX_TEXT) throw new IllegalArgumentException("Say what the session is for");
-        checkRepo(config, repo);
         ObjectNode s = JSON.createObjectNode().put("id", id).put("name", name).put("repo", repo).put("agent", "claude")
                 .put("prompt", prompt).put("created", Instant.now().toString()).put("archived", false);
         setLink(s, in);
@@ -357,15 +370,20 @@ public class Sessions implements Callable<Integer> {
 
     /** A command's output, or null when it failed. With a token, as GH_TOKEN for that command only. */
     static String run(List<String> cmd, String token) throws Exception {
-        ProcessBuilder pb = new ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD);
-        if (token != null) pb.environment().put("GH_TOKEN", token);
-        Process p = pb.start();
-        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
-        if (!p.waitFor(60, TimeUnit.SECONDS)) {
-            p.destroyForcibly();
-            return null;
+        // Output to a file, so the time limit holds even if it never closes its output.
+        Path out = Files.createTempFile("sessions-", ".out");
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cmd).redirectError(ProcessBuilder.Redirect.DISCARD).redirectOutput(out.toFile());
+            if (token != null) pb.environment().put("GH_TOKEN", token);
+            Process p = pb.start();
+            if (!p.waitFor(60, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return null;
+            }
+            return p.exitValue() == 0 ? Files.readString(out, StandardCharsets.UTF_8).strip() : null;
+        } finally {
+            Files.deleteIfExists(out);
         }
-        return p.exitValue() == 0 ? out : null;
     }
 
     // ---- files ----
