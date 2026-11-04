@@ -25,6 +25,8 @@ async function loadSessions() {
 }
 
 const working = s => (s.turns ?? []).some(t => t.status === 'running');
+const AGENT_NAMES = { claude: 'Claude Code', bob: 'IBM Bob', codex: 'Codex', pi: 'pi' };
+const agentName = id => AGENT_NAMES[id] ?? 'Claude Code';
 /** The tags in its settings (TAGS), as spelled there. */
 const settingsTags = values => [...new Set((values?.TAGS ?? '').split(',').map(t => t.trim()).filter(Boolean))];
 const tagged = (s, tag) => !tag || (s.tags ?? []).includes(tag);
@@ -34,12 +36,14 @@ class SessionsTab extends LitElement {
         _sessions: { state: true }, _route: { state: true }, _error: { state: true }, _live: { state: true },
         _busy: { state: true }, _goalOpen: { state: true }, _editing: { state: true }, _archived: { state: true },
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
-        _tagging: { state: true }, _repos: { state: true },
+        _tagging: { state: true }, _options: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
         :host { display: block; }
-        .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 12px 0; }
+        .page { display: grid; gap: 18px; }
+        .page-top p.hint { margin: 6px 0 0; }
+        .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0; }
         .bar a { display: inline-flex; gap: 6px; align-items: center; padding: 6px 12px; border-radius: 999px;
             border: 1px solid var(--line); color: var(--ink); text-decoration: none; background: var(--surface); max-width: 16rem; }
         .bar a span.n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -88,7 +92,10 @@ class SessionsTab extends LitElement {
         form.new .hint { margin: 0; }
         form.new .row { padding-top: 4px; }
         .confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-        .filter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+        .panel.empty { display: grid; gap: 16px; justify-items: start; padding: 22px 24px; margin-top: 4px; }
+        .panel.empty p { margin: 0; }
+        .bar { row-gap: 10px; }
+        .filter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
         .filter button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
         .tagbox { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
         .tagbox label { display: inline-flex; gap: 4px; align-items: center; font-weight: 400; }
@@ -155,8 +162,12 @@ class SessionsTab extends LitElement {
     async _routeChanged() {
         const p = (this._route ?? '').split('/');
         if (p[0] === 'new') {
-            // Repos to suggest: those on the GitHub elf's board, and of your sessions. Typing any other works too.
-            if (!this._repos) elf.act('repos', {}).then(r => { this._repos = r?.repos ?? []; }).catch(() => { this._repos = []; });
+            // Repos to suggest (those on the GitHub elf's board, and of your sessions; typing any other works too), and
+            // the coding agents: which are installed, which can run a session, and the one in the settings.
+            if (!this._options) {
+                elf.act('new-options', {}).then(r => { this._options = r ?? {}; })
+                    .catch(() => { this._options = { repos: [], agents: [{ id: 'claude', label: 'Claude Code', installed: true, sessions: true }], agent: 'claude' }; });
+            }
             // Started already (you came back to a todo's Start a session): its page.
             if (SESSION.test(p[4] ?? '')) {
                 await this._ready();
@@ -212,7 +223,7 @@ class SessionsTab extends LitElement {
                 ${this._bar(sessions, current, route)}
                 ${route.startsWith('new') ? this._newForm(route)
                     : current ? this._session(current)
-                    : html`<div class="panel"><p>${/^s\//.test(route) ? 'That session isn\'t here: it was never started, or it was deleted.'
+                    : html`<div class="panel empty"><p>${/^s\//.test(route) ? 'That session isn\'t here: it was never started, or it was deleted.'
                         : sessions.length ? 'Pick a session above, or start a new one.'
                         : 'No sessions yet. Start one: pick a repo and say what it\'s for.'}</p>
                         <button class="primary" @click=${() => this._go('new')}>New session</button></div>`}`}
@@ -255,7 +266,10 @@ class SessionsTab extends LitElement {
         const link = ELF.test(p[1] ?? '') && REF.test(p[2] ?? '') ? { elf: p[1], ref: p[2], title: fromRoute(p[3]),
             id: SESSION.test(p[4] ?? '') ? p[4] : null } : null;
         const mine = [...new Set((this._sessions ?? []).map(x => x.repo))];
-        const repos = [...new Set([...(this._repos ?? []), ...mine])];
+        const repos = [...new Set([...(this._options?.repos ?? []), ...mine])];
+        const agents = this._options?.agents ?? [{ id: 'claude', label: 'Claude Code', installed: true, sessions: true }];
+        const usable = a => a.installed && a.sessions;
+        const chosen = agents.find(a => a.id === this._options?.agent && usable(a)) ?? agents.find(usable);
         return html`<form class="new panel" @submit=${e => this._create(e, link)}>
             <h2>New session</h2>
             ${link ? html`<p class="hint">Linked to ${link.title || link.ref} (${link.elf}).</p>` : nothing}
@@ -268,11 +282,16 @@ class SessionsTab extends LitElement {
             <datalist id="repo-list">${repos.map(r => html`<option value=${r}></option>`)}</datalist>
             ${this._tags.length ? html`<fieldset class="tagbox"><legend>Tags</legend>${this._tags.map(t => html`<label>
                 <input type="checkbox" name="tag" value=${t} ?checked=${t === this._filter}>${t}</label>`)}</fieldset>` : nothing}
+            <label>Coding agent <select name="agent" required>
+                ${agents.map(a => html`<option value=${a.id} ?disabled=${!usable(a)} ?selected=${a === chosen}>${a.label}${
+                    !a.installed ? ' (not installed)' : !a.sessions ? ' (not for sessions yet)' : ''}</option>`)}
+                </select>
+                <span class="field-hint">The session keeps this agent. Your default is in Settings.</span></label>
             <label>What it's for <textarea name="prompt" required maxlength="20000"
                 placeholder="The first message. It stays pinned above the chat, and the agent gets it with every turn."
                 .value=${link?.title ?? ''}></textarea></label>
-            <p class="hint">Coding agent: Claude Code. It works in its own clone of the repo, in the runner's sandbox, with
-                no GitHub credentials: it commits there, and nothing is pushed.</p>
+            <p class="hint">The agent works in its own clone of the repo, in the runner's sandbox, with no GitHub credentials:
+                it commits there, and nothing is pushed.</p>
             <div class="row">
                 <button class="primary" type="submit" ?disabled=${!!this._busy}>${this._busy === 'create' ? spinner : ''}Start</button>
                 <button class="quiet" type="button" @click=${() => this._go('')}>Cancel</button>
@@ -286,6 +305,7 @@ class SessionsTab extends LitElement {
         const params = { name: String(f.get('name')).trim(), repo: String(f.get('repo')).trim(), prompt: String(f.get('prompt')).trim() };
         if (link) Object.assign(params, { link: `${link.elf}:${link.ref}`, linkTitle: link.title });
         if (link?.id) params.id = link.id;
+        if (f.get('agent')) params.agent = String(f.get('agent'));
         const tags = f.getAll('tag').map(String);
         if (tags.length) params.tags = tags.join(',');
         const r = await this._act('create', params, 'Couldn\'t start it');
@@ -315,7 +335,7 @@ class SessionsTab extends LitElement {
                 </div>
             </div>
             <div class="meta">
-                <span>${s.repo}</span><span>Claude Code</span><span>Started ${ago(s.created)}</span>
+                <span>${s.repo}</span><span>${agentName(s.agent)}</span><span>Started ${ago(s.created)}</span>
                 ${this._tagsOf(s)}
                 ${s.link ? html`<span>Linked to <a href="#" @click=${e => { e.preventDefault(); this._openLink(s.link); }}>${s.link.title || s.link.ref}</a>
                     <button class="sm quiet" @click=${() => this._act('unlink', { session: s.id }, 'Couldn\'t unlink it')}>Unlink</button></span>`
@@ -391,7 +411,8 @@ class SessionsTab extends LitElement {
                     it won't remember this turn.</p>`
                 : html`<p class="error">It didn't answer: ${t.error ?? 'it failed'}</p>`}
                 ${t.status !== 'running' ? html`<div class="row when">
-                    <span>${ago(t.finished ?? t.at)}${typeof t.cost === 'number' ? ` · $${t.cost.toFixed(2)}` : ''}</span>
+                    <span>${ago(t.finished ?? t.at)}${typeof t.cost === 'number' ? ` · $${t.cost.toFixed(2)}` : ''}${
+                        typeof t.bobcoins === 'number' ? ` · ${t.bobcoins.toFixed(2)} Bobcoins` : ''}</span>
                     <button class="sm quiet" @click=${() => this._toggleLines(t)}>${shown ? 'Hide what it did' : 'What it did'}</button></div>
                     ${shown ? html`<div class="lines">${shown.length ? shown.join('\n') : 'Nothing kept.'}</div>` : nothing}` : nothing}
             </div>`;

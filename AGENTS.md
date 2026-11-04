@@ -220,7 +220,9 @@ For a session that goes on over many turns (runner 0.46.0 and later, Sessions is
 checkout (`[a-z0-9-]`, up to 40) gives the agent a clone of the repo of its own, kept between agents with the same
 slot, so each turn finds the last one's work; the runner names it after your elf, so you only ever reach your own. No
 `schema` (or an empty one) has it answer in plain text, its last message, as `output.reply`. `goal` is given to it
-again in the system prompt each turn, so it outlives compaction. Pass the last answer's `session` to resume it. The
+again in the system prompt each turn, so it outlives compaction. `agent: "bob"` (runner 0.47.0 and later, only for
+such a session) has IBM Bob work on it instead of Claude Code; a session keeps its agent, since neither can resume the
+other's. Pass the last answer's `session` to resume it. The
 tab removes a slot it's done with with `elf.removeSlot(repo, slot)`, refused while one of its agents works there.
 `images` (runner 0.42.0 and later, which tells an action its version in `ELF_RUNNER_VERSION`) shows the agent up to 4
 images with its prompt, such as screenshots you pasted: `[{"type": "image/png", "data": "<base64>"}]`, each a PNG,

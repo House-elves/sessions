@@ -14,6 +14,8 @@ public class Config {
     String githubLogin;
     /** The tags a session may carry (TAGS, comma-separated), as you spelled them. */
     java.util.List<String> tags;
+    /** The agent a new session starts with (CODING_AGENT): claude or bob; another, or none, is Claude Code. */
+    String codingAgent;
 
     static Config load() throws IOException {
         Map<String, String> raw = new HashMap<>();
@@ -26,6 +28,8 @@ public class Config {
         }
         Config c = new Config();
         c.githubLogin = raw.getOrDefault("GITHUB_LOGIN", "");
+        c.codingAgent = raw.getOrDefault("CODING_AGENT", "claude").strip();
+        if (!java.util.List.of("claude", "bob").contains(c.codingAgent)) c.codingAgent = "claude";
         c.tags = java.util.Arrays.stream(raw.getOrDefault("TAGS", "Personal, Work").split(",")).map(String::strip)
                 .filter(t -> t.matches("[A-Za-z0-9 ._*/+#&()-]{1,30}")).distinct().limit(30).toList();
         if (!c.githubLogin.isEmpty() && !c.githubLogin.matches("[A-Za-z0-9][A-Za-z0-9-]{0,38}")) {

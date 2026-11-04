@@ -14,6 +14,9 @@ your desk.
   lose it. **Edit goal** changes what the agent gets from then on; the first message stays as you sent it.
 - **Chat:** each message you send is one turn. The tab shows what the agent is doing as it works (its text, and
   `▸ Bash: mvn test` for each step), then its reply. **Stop** ends a turn early.
+- **Your choice of agent:** Claude Code or IBM Bob, picked on the New session form, with your default in Settings
+  (`CODING_AGENT`). A session keeps its agent. Agents not installed here, or that can't run a session yet (Codex,
+  pi), are listed but can't be picked. IBM Bob uses the API key in the runner's settings, and needs runner 0.47.0.
 - **Its own clone:** each session works in a clone of the repo kept for it alone (the runner's `checkout.slot`), so
   the agent picks up where it left off, and two sessions on one repo never touch each other's work.
 - **Linked to a todo:** a session can point at a todo in the [Todo list](https://github.com/phillip-kruger/todo-list)
@@ -29,8 +32,8 @@ your desk.
 - When you start a session, it checks with your gh account (`GITHUB_LOGIN`) that you can see the repo.
 - To suggest repos for a new session, it reads the repos on the [GitHub elf](https://github.com/House-elves/github)'s
   board, from `~/.config/github/board/board.json`, which it only reads. You can still type any repo.
-- Each turn is an agent the [runner](https://github.com/House-elves/elf-runner) starts in its sandbox: Claude Code,
-  in the session's clone, with no GitHub credentials and nothing of your home. It can commit there; nothing is pushed.
+- Each turn is an agent the [runner](https://github.com/House-elves/elf-runner) starts in its sandbox: Claude Code or
+  IBM Bob, in the session's clone, with no GitHub credentials and nothing of your home. It can commit there; nothing is pushed.
   It can reach the internet, as the desk's other coding agents can.
 
 ## Links

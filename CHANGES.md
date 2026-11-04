@@ -1,5 +1,11 @@
 # What's new
 
+## 0.3.0
+
+- New: pick the coding agent for a session, Claude Code or IBM Bob, with your default in Settings (Coding agent).
+  IBM Bob's turns show what they cost in Bobcoins.
+- Fixed: the page has room between the tags, the sessions and the empty state.
+
 ## 0.2.0
 
 - New: the Repo field suggests repos as you type: those on your GitHub tab's board and those of your sessions. You can

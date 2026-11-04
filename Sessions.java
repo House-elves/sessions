@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
  * of the session's repo kept for that session alone (checkout slot), resuming the session's agent so it keeps its
  * context. The session's first message (its goal) goes with every turn. Without --action it lists the sessions.
  */
-@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.2.0", description = "Coding-agent sessions for Elf Desk")
+@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.3.0", description = "Coding-agent sessions for Elf Desk")
 public class Sessions implements Callable<Integer> {
 
     static final ObjectMapper JSON = new ObjectMapper();
@@ -111,7 +111,7 @@ public class Sessions implements Callable<Integer> {
         {
             JsonNode answer = switch (action) {
                 case "create" -> create(config, in);
-                case "repos" -> repos();
+                case "new-options" -> newOptions(config);
                 case "send" -> send(in);
                 case "agent-done" -> agentDone(in);
                 case "rename" -> rename(in);
@@ -149,7 +149,9 @@ public class Sessions implements Callable<Integer> {
         if (name.isEmpty()) throw new IllegalArgumentException("Give the session a name");
         if (!REPO.matcher(repo).matches()) throw new IllegalArgumentException("Pick a repo, like owner/name");
         if (prompt.isEmpty() || prompt.length() > MAX_TEXT) throw new IllegalArgumentException("Say what the session is for");
-        ObjectNode s = JSON.createObjectNode().put("id", id).put("name", name).put("repo", repo).put("agent", "claude")
+        String agent = in.path("agent").asText(config.codingAgent);
+        if (!SESSION_AGENTS.contains(agent)) throw new IllegalArgumentException("A session's agent is Claude Code or IBM Bob");
+        ObjectNode s = JSON.createObjectNode().put("id", id).put("name", name).put("repo", repo).put("agent", agent)
                 .put("prompt", prompt).put("created", Instant.now().toString()).put("archived", false);
         setLink(s, in);
         setTags(config, s, in);
@@ -161,6 +163,33 @@ public class Sessions implements Callable<Integer> {
      * repos: repos to suggest for a new session, most used first: those on the GitHub elf's board (its own saved
      * board.json, only read, as its README allows), then those of your sessions. Empty without either.
      */
+    /**
+     * The coding agents, for a new session: which are installed here and which can run a session (Claude Code and IBM
+     * Bob; Codex and pi only answer elves' questions so far), with the one in the settings first.
+     */
+    static final List<String[]> CODING_AGENTS = List.of(new String[] {"claude", "Claude Code", "claude"},
+            new String[] {"bob", "IBM Bob", "bob"}, new String[] {"codex", "Codex", "codex"}, new String[] {"pi", "pi", "pi"});
+    static final List<String> SESSION_AGENTS = List.of("claude", "bob");
+
+    static JsonNode newOptions(Config config) throws Exception {
+        ObjectNode out = (ObjectNode) repos();
+        out.put("agent", config.codingAgent);
+        ArrayNode agents = out.putArray("agents");
+        for (String[] a : CODING_AGENTS) {
+            agents.addObject().put("id", a[0]).put("label", a[1]).put("installed", onPath(a[2]))
+                    .put("sessions", SESSION_AGENTS.contains(a[0]));
+        }
+        return out;
+    }
+
+    /** The program is on the PATH this elf runs with (the runner's). */
+    static boolean onPath(String program) {
+        for (String dir : System.getenv().getOrDefault("PATH", "").split(java.io.File.pathSeparator)) {
+            if (!dir.isEmpty() && Files.isExecutable(Path.of(dir, program))) return true;
+        }
+        return false;
+    }
+
     static JsonNode repos() throws IOException {
         java.util.Map<String, Integer> seen = new java.util.LinkedHashMap<>();
         Path board = Path.of(System.getProperty("user.home"), ".config", "github", "board", "board.json");
@@ -199,6 +228,9 @@ public class Sessions implements Callable<Integer> {
      * schema) and is given the session's goal again, so a long session doesn't lose it.
      */
     static JsonNode turn(ObjectNode s, String text) throws IOException {
+        // An older runner doesn't know agent, and would quietly run Claude Code instead: refused before anything is saved.
+        boolean bob = s.path("agent").asText("claude").equals("bob");
+        if (bob && !runnerAtLeast(0, 47)) throw new IllegalStateException("IBM Bob sessions need runner 0.47.0 or later: update the desk");
         harvest(s);
         ArrayNode turns = (ArrayNode) s.path("turns");
         for (JsonNode t : turns) {
@@ -215,12 +247,24 @@ public class Sessions implements Callable<Integer> {
         agent.putObject("checkout").put("repo", s.path("repo").asText()).put("number", 0).put("kind", "REPO")
                 .put("slot", s.path("id").asText());
         agent.put("prompt", text);
+        // The session keeps the agent it started with: neither can resume the other's.
+        if (bob) agent.put("agent", "bob");
         if (n > 1) agent.put("goal", goal(s));
         String session = s.path("session").asText("");
         if (!session.isEmpty()) agent.put("session", session);
         ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText());
         out.set("agent", agent);
         return out;
+    }
+
+    /** The runner that started this action is at least major.minor (it says in ELF_RUNNER_VERSION); run by hand, yes. */
+    static boolean runnerAtLeast(int major, int minor) {
+        String v = System.getenv("ELF_RUNNER_VERSION");
+        if (v == null || v.isBlank()) return true;
+        Matcher m = Pattern.compile("(\\d+)\\.(\\d+)").matcher(v);
+        if (!m.find()) return false;
+        int a = Integer.parseInt(m.group(1)), b = Integer.parseInt(m.group(2));
+        return a > major || (a == major && b >= minor);
     }
 
     /** What the agent is given each turn: the goal as you last edited it, or the first message. */
@@ -274,6 +318,7 @@ public class Sessions implements Callable<Integer> {
                     }
                 }
                 if (a.path("cost").isNumber()) turn.put("cost", a.path("cost").asDouble());
+                if (a.path("bobcoins").isNumber()) turn.put("bobcoins", a.path("bobcoins").asDouble());
                 turn.put("finished", a.path("finished").asText(Instant.now().toString()));
             } catch (IOException e) {
                 // Read again next time: it may be half way through being written.
