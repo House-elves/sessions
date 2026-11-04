@@ -1,5 +1,10 @@
 # What's new
 
+## 0.4.0
+
+- New: a session started from a todo, or from one step of its checklist, starts with the todo's description,
+  checklist and issues as its goal, for you to change before you start.
+
 ## 0.3.1
 
 - New: when IBM Bob (or Claude Code) isn't installed here, the New session form offers Install. The desk asks you

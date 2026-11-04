@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
  * of the session's repo kept for that session alone (checkout slot), resuming the session's agent so it keeps its
  * context. The session's first message (its goal) goes with every turn. Without --action it lists the sessions.
  */
-@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.3.1", description = "Coding-agent sessions for Elf Desk")
+@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.4.0", description = "Coding-agent sessions for Elf Desk")
 public class Sessions implements Callable<Integer> {
 
     static final ObjectMapper JSON = new ObjectMapper();
@@ -112,6 +112,7 @@ public class Sessions implements Callable<Integer> {
             JsonNode answer = switch (action) {
                 case "create" -> create(config, in);
                 case "new-options" -> newOptions(config);
+                case "link-context" -> linkContext(in);
                 case "send" -> send(in);
                 case "agent-done" -> agentDone(in);
                 case "rename" -> rename(in);
@@ -212,6 +213,56 @@ public class Sessions implements Callable<Integer> {
 
     static void count(java.util.Map<String, Integer> seen, String repo) {
         if (REPO.matcher(repo).matches()) seen.merge(repo, 1, Integer::sum);
+    }
+
+    /**
+     * link-context: what a session started from another elf's item is about, as the goal you start from. For now the
+     * Todo list's todos (todo-list:<todo> or todo-list:<todo>.<step>): read from its saved list, which it only reads
+     * (its README says so), and only for the one todo. {title, prompt}, or {} when it isn't there.
+     */
+    static JsonNode linkContext(JsonNode in) throws IOException {
+        ObjectNode out = JSON.createObjectNode();
+        Matcher m = Pattern.compile("todo-list:(t[0-9]{10,16})(?:\\.(c[0-9]{10,16}))?").matcher(in.path("link").asText(""));
+        if (!m.matches()) return out;
+        Path list = Path.of(System.getProperty("user.home"), ".config", "todo-list", "todos", "todos.json");
+        if (!Files.isRegularFile(list) || Files.size(list) > 20_000_000) return out;
+        JsonNode todo = null;
+        for (JsonNode t : JSON.readTree(list.toFile()).path("todos")) if (t.path("id").asText().equals(m.group(1))) todo = t;
+        if (todo == null) return out;
+        JsonNode step = null;
+        if (m.group(2) != null) for (JsonNode i : todo.path("checklist")) if (i.path("id").asText().equals(m.group(2))) step = i;
+        String what = oneLine(todo.path("what").asText(""), 300);
+        StringBuilder p = new StringBuilder();
+        if (step != null) {
+            p.append(oneLine(step.path("text").asText(""), 300)).append("\n\nThis is one step of the todo \"").append(what).append("\".");
+        } else {
+            p.append(what);
+        }
+        String who = oneLine(todo.path("who").asText(""), 100), due = todo.path("due").asText("");
+        if (!who.isEmpty() || !due.isEmpty()) {
+            p.append("\n\n").append(!who.isEmpty() ? "Asked by " + who + "." : "").append(!who.isEmpty() && !due.isEmpty() ? " " : "")
+                    .append(!due.isEmpty() ? "Due " + due + "." : "");
+        }
+        String description = todo.path("description").asText("").strip();
+        if (!description.isEmpty()) p.append("\n\n").append(description);
+        if (!todo.path("checklist").isEmpty()) {
+            p.append("\n\nIts checklist:");
+            for (JsonNode i : todo.path("checklist")) {
+                p.append("\n- [").append(i.path("done").asBoolean() ? "x" : " ").append("] ").append(oneLine(i.path("text").asText(""), 300))
+                        .append(step != null && i.path("id").asText().equals(step.path("id").asText()) ? " (this step)" : "");
+            }
+        }
+        List<String> issues = new ArrayList<>();
+        for (JsonNode i : todo.path("issues")) {
+            String repo = i.path("repo").asText("");
+            if (REPO.matcher(repo).matches() && i.path("number").asInt() > 0) {
+                issues.add(repo + "#" + i.path("number").asInt() + (i.path("state").asText("").equals("closed") ? " (closed)" : ""));
+            }
+        }
+        if (!issues.isEmpty()) p.append("\n\nIts GitHub issues: ").append(String.join(", ", issues)).append(".");
+        out.put("title", oneLine(step != null ? step.path("text").asText("") : what, 80));
+        out.put("prompt", clip(p.toString(), MAX_TEXT));
+        return out;
     }
 
     /** send: your next message in a session, as its next turn. */

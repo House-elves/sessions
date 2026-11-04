@@ -49,6 +49,11 @@ Elves can't read each other's data, so a link is two halves, handed over through
 
 A link is only a pointer: nothing runs until you click Start or Send.
 
+A session started from a todo (or one step of its checklist, `<todo>.<step>`) starts from what the todo says: Sessions
+reads that one todo from the Todo list's saved list (`~/.config/todo-list/todos/todos.json`, which it only reads) and
+puts its title, who asked, its due date, description, checklist and GitHub issues in the goal, for you to read and
+change before you start.
+
 ## Running it by hand
 
 ```

@@ -36,7 +36,7 @@ class SessionsTab extends LitElement {
         _sessions: { state: true }, _route: { state: true }, _error: { state: true }, _live: { state: true },
         _busy: { state: true }, _goalOpen: { state: true }, _editing: { state: true }, _archived: { state: true },
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
-        _tagging: { state: true }, _options: { state: true }, _installed: { state: true },
+        _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -168,6 +168,13 @@ class SessionsTab extends LitElement {
                 elf.act('new-options', {}).then(r => { this._options = r ?? {}; })
                     .catch(() => { this._options = { repos: [], agents: [{ id: 'claude', label: 'Claude Code', installed: true, sessions: true }], agent: 'claude' }; });
             }
+            // From another elf's item (a todo): what it's about, read by the elf, as the goal to start from.
+            this._context = null;
+            if (ELF.test(p[1] ?? '') && REF.test(p[2] ?? '')) {
+                const link = `${p[1]}:${p[2]}`;
+                elf.act('link-context', { link }).then(c => { if (this._route?.startsWith('new')) this._context = { link, ...(c ?? {}) }; })
+                    .catch(() => {});
+            }
             // Started already (you came back to a todo's Start a session): its page.
             if (SESSION.test(p[4] ?? '')) {
                 await this._ready();
@@ -290,7 +297,9 @@ class SessionsTab extends LitElement {
             ${this._installable(agents)}
             <label>What it's for <textarea name="prompt" required maxlength="20000"
                 placeholder="The first message. It stays pinned above the chat, and the agent gets it with every turn."
-                .value=${link?.title ?? ''}></textarea></label>
+                .value=${this._context?.prompt ?? link?.title ?? ''}></textarea>
+                ${link && this._context?.prompt ? html`<span class="field-hint">From the ${link.elf === 'todo-list' ? 'todo' : link.elf}: its
+                    description, checklist and issues. Change it as you like.</span>` : nothing}</label>
             <p class="hint">The agent works in its own clone of the repo, in the runner's sandbox, with no GitHub credentials:
                 it commits there, and nothing is pushed.</p>
             <div class="row">
