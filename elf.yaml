@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.1.0
+version: 0.2.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent, each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -15,6 +15,7 @@ builtin: true
 reads:
   - Your sessions and their turns, which it keeps on this machine.
   - When you start a session, whether your gh account can see the repo you picked, on GitHub.
+  - When the GitHub elf is on your desk, the repos on its board (from the board it saved on this machine, which it only reads), to suggest one for a new session.
   - Each message you send goes to the coding agent (the runner's, in its sandbox, with no GitHub credentials), which reads and changes its own clone of that repo, and can reach the internet.
 writes:
   - Your sessions, on this machine. The agent's commits stay in its clone on this machine; nothing is pushed.
@@ -66,6 +67,10 @@ actions:
       linkTitle: {pattern: "\\P{Cntrl}{0,300}", optional: true, max: 300}
       # Some of the tags in its settings, comma-separated.
       tags: {pattern: "([A-Za-z0-9 ._*/+#&()-]{1,30}(,[A-Za-z0-9 ._*/+#&()-]{1,30}){0,9})?", optional: true, max: 320}
+  repos:
+    label: Suggest repos for a new session
+    args: [--action=repos]
+    ask: false
   send:
     label: Send a message
     args: [--action=send]

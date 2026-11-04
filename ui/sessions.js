@@ -34,7 +34,7 @@ class SessionsTab extends LitElement {
         _sessions: { state: true }, _route: { state: true }, _error: { state: true }, _live: { state: true },
         _busy: { state: true }, _goalOpen: { state: true }, _editing: { state: true }, _archived: { state: true },
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
-        _tagging: { state: true },
+        _tagging: { state: true }, _repos: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -62,12 +62,31 @@ class SessionsTab extends LitElement {
         .lines { font-family: var(--font-code); font-size: 12px; color: var(--muted); white-space: pre-wrap;
             overflow-wrap: anywhere; max-height: 18rem; overflow-y: auto; border-left: 2px solid var(--line); padding-left: 8px; }
         .when { font-size: 12px; color: var(--muted); }
-        textarea { width: 100%; box-sizing: border-box; min-height: 5rem; resize: vertical; font: inherit; }
+        input, textarea, select { font: inherit; color: var(--ink); }
+        /* The desk's shared styles leave text fields to the browser, so give them the desk's look here. */
+        input:not([type="checkbox"]):not([type="radio"]), textarea, select {
+            box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 11px; font-size: 14px;
+            background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-control, 9px);
+            color-scheme: inherit; transition: border-color 0.15s, box-shadow 0.15s; }
+        input:not([type="checkbox"]):not([type="radio"]):hover, textarea:hover, select:hover { border-color: var(--muted); }
+        input:not([type="checkbox"]):not([type="radio"]):focus, textarea:focus, select:focus {
+            outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+        input:disabled, textarea:disabled { opacity: 0.6; cursor: not-allowed; }
+        input::placeholder, textarea::placeholder { color: var(--muted); opacity: 0.8; }
+        input[type="checkbox"] { accent-color: var(--accent); }
+        textarea { min-height: 5rem; resize: vertical; line-height: 1.5; }
         .compose { margin-top: 10px; display: grid; gap: 6px; }
         .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-        form.new { display: grid; gap: 10px; max-width: 46rem; }
-        form.new label { display: grid; gap: 4px; font-weight: 500; }
-        input[type="text"] { font: inherit; }
+        form.new { display: grid; gap: 18px; max-width: 46rem; padding: 20px 22px; }
+        form.new h2 { margin: 0 0 2px; }
+        form.new label { display: grid; gap: 6px; font-size: 13px; color: var(--muted); }
+        form.new .field-hint { font-size: 12px; color: var(--muted); }
+        form.new textarea { min-height: 9rem; }
+        form.new fieldset { border: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+        form.new legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 6px; }
+        form.new .tagbox label { display: inline-flex; flex-direction: row; font-size: 14px; color: var(--ink); }
+        form.new .hint { margin: 0; }
+        form.new .row { padding-top: 4px; }
         .confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .filter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
         .filter button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
@@ -135,10 +154,24 @@ class SessionsTab extends LitElement {
     /** A link handed over by another elf (a todo's Link session): kept on the session, then its page. */
     async _routeChanged() {
         const p = (this._route ?? '').split('/');
+        if (p[0] === 'new') {
+            // Repos to suggest: those on the GitHub elf's board, and of your sessions. Typing any other works too.
+            if (!this._repos) elf.act('repos', {}).then(r => { this._repos = r?.repos ?? []; }).catch(() => { this._repos = []; });
+            // Started already (you came back to a todo's Start a session): its page.
+            if (SESSION.test(p[4] ?? '')) {
+                await this._ready();
+                if ((this._sessions ?? []).some(x => x.id === p[4])) this._go(`s/${p[4]}`, true);
+            }
+        }
         if (p[0] === 'link' && SESSION.test(p[1] ?? '') && ELF.test(p[2] ?? '') && REF.test(p[3] ?? '')) {
             await this._act('link', { session: p[1], link: `${p[2]}:${p[3]}`, linkTitle: fromRoute(p[4]) }, 'Couldn\'t link it');
             this._go(`s/${p[1]}`, true);
         }
+    }
+
+    /** Waits for the first load of the sessions. */
+    async _ready() {
+        for (let i = 0; this._sessions === null && i < 100; i++) await new Promise(r => setTimeout(r, 100));
     }
 
     _go(route, replace = false) {
@@ -147,6 +180,7 @@ class SessionsTab extends LitElement {
         this._editing = null;
         this._tagging = false;
         elf.go(route, { replace });
+        this._routeChanged();
     }
 
     async _act(action, params, failed) {
@@ -178,7 +212,8 @@ class SessionsTab extends LitElement {
                 ${this._bar(sessions, current, route)}
                 ${route.startsWith('new') ? this._newForm(route)
                     : current ? this._session(current)
-                    : html`<div class="panel"><p>${sessions.length ? 'Pick a session above, or start a new one.'
+                    : html`<div class="panel"><p>${/^s\//.test(route) ? 'That session isn\'t here: it was never started, or it was deleted.'
+                        : sessions.length ? 'Pick a session above, or start a new one.'
                         : 'No sessions yet. Start one: pick a repo and say what it\'s for.'}</p>
                         <button class="primary" @click=${() => this._go('new')}>New session</button></div>`}`}
         </div>`;
@@ -214,16 +249,23 @@ class SessionsTab extends LitElement {
     }
 
     _newForm(route) {
-        // From another elf: new/<elf>/<ref>/<title>, the link and the text to start from.
+        // From another elf: new/<elf>/<ref>/<title>[/<session id>], the link, the text to start from, and the id it
+        // already keeps on its side of the link.
         const p = route.split('/');
-        const link = ELF.test(p[1] ?? '') && REF.test(p[2] ?? '') ? { elf: p[1], ref: p[2], title: fromRoute(p[3]) } : null;
+        const link = ELF.test(p[1] ?? '') && REF.test(p[2] ?? '') ? { elf: p[1], ref: p[2], title: fromRoute(p[3]),
+            id: SESSION.test(p[4] ?? '') ? p[4] : null } : null;
+        const mine = [...new Set((this._sessions ?? []).map(x => x.repo))];
+        const repos = [...new Set([...(this._repos ?? []), ...mine])];
         return html`<form class="new panel" @submit=${e => this._create(e, link)}>
             <h2>New session</h2>
             ${link ? html`<p class="hint">Linked to ${link.title || link.ref} (${link.elf}).</p>` : nothing}
             <label>Name <input type="text" name="name" required maxlength="80" .value=${link?.title?.slice(0, 80) ?? ''}
                 placeholder="mvnpm search fix"></label>
-            <label>Repo <input type="text" name="repo" required maxlength="140" placeholder="owner/name"
-                pattern="[A-Za-z0-9][A-Za-z0-9\\-]{0,38}/[A-Za-z0-9._\\-]{1,100}"></label>
+            <label>Repo <input type="text" name="repo" required maxlength="140" placeholder="owner/name" list="repo-list"
+                autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9\\-]{0,38}/[A-Za-z0-9._\\-]{1,100}">
+                <span class="field-hint">${repos.length ? 'Type any repo, or pick one from your GitHub board and your sessions.'
+                    : 'Type a repo you can read, like owner/name.'}</span></label>
+            <datalist id="repo-list">${repos.map(r => html`<option value=${r}></option>`)}</datalist>
             ${this._tags.length ? html`<fieldset class="tagbox"><legend>Tags</legend>${this._tags.map(t => html`<label>
                 <input type="checkbox" name="tag" value=${t} ?checked=${t === this._filter}>${t}</label>`)}</fieldset>` : nothing}
             <label>What it's for <textarea name="prompt" required maxlength="20000"
@@ -233,7 +275,7 @@ class SessionsTab extends LitElement {
                 no GitHub credentials: it commits there, and nothing is pushed.</p>
             <div class="row">
                 <button class="primary" type="submit" ?disabled=${!!this._busy}>${this._busy === 'create' ? spinner : ''}Start</button>
-                <button class="quiet" type="button" @click=${() => history.length > 1 ? history.back() : this._go('')}>Cancel</button>
+                <button class="quiet" type="button" @click=${() => this._go('')}>Cancel</button>
             </div>
         </form>`;
     }
@@ -243,6 +285,7 @@ class SessionsTab extends LitElement {
         const f = new FormData(e.target);
         const params = { name: String(f.get('name')).trim(), repo: String(f.get('repo')).trim(), prompt: String(f.get('prompt')).trim() };
         if (link) Object.assign(params, { link: `${link.elf}:${link.ref}`, linkTitle: link.title });
+        if (link?.id) params.id = link.id;
         const tags = f.getAll('tag').map(String);
         if (tags.length) params.tags = tags.join(',');
         const r = await this._act('create', params, 'Couldn\'t start it');

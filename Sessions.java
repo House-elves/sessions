@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
  * of the session's repo kept for that session alone (checkout slot), resuming the session's agent so it keeps its
  * context. The session's first message (its goal) goes with every turn. Without --action it lists the sessions.
  */
-@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.1.0", description = "Coding-agent sessions for Elf Desk")
+@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.2.0", description = "Coding-agent sessions for Elf Desk")
 public class Sessions implements Callable<Integer> {
 
     static final ObjectMapper JSON = new ObjectMapper();
@@ -111,6 +111,7 @@ public class Sessions implements Callable<Integer> {
         {
             JsonNode answer = switch (action) {
                 case "create" -> create(config, in);
+                case "repos" -> repos();
                 case "send" -> send(in);
                 case "agent-done" -> agentDone(in);
                 case "rename" -> rename(in);
@@ -154,6 +155,34 @@ public class Sessions implements Callable<Integer> {
         setTags(config, s, in);
         s.putArray("turns");
         return turn(s, prompt);
+    }
+
+    /**
+     * repos: repos to suggest for a new session, most used first: those on the GitHub elf's board (its own saved
+     * board.json, only read, as its README allows), then those of your sessions. Empty without either.
+     */
+    static JsonNode repos() throws IOException {
+        java.util.Map<String, Integer> seen = new java.util.LinkedHashMap<>();
+        Path board = Path.of(System.getProperty("user.home"), ".config", "github", "board", "board.json");
+        if (Files.isRegularFile(board) && Files.size(board) < 20_000_000) {
+            try {
+                JsonNode b = JSON.readTree(board.toFile());
+                for (JsonNode lane : b.path("lanes")) for (JsonNode i : lane.path("items")) count(seen, i.path("repo").asText(""));
+                for (JsonNode i : b.path("hidden")) count(seen, i.path("repo").asText(""));
+                b.path("threads").fieldNames().forEachRemaining(k -> count(seen, k.replaceFirst("#\\d+$", "")));
+            } catch (IOException e) {
+                // Half written, or not what it was: suggest what else there is.
+            }
+        }
+        for (ObjectNode s : all()) count(seen, s.path("repo").asText(""));
+        ObjectNode out = JSON.createObjectNode();
+        ArrayNode list = out.putArray("repos");
+        seen.entrySet().stream().sorted((a, b) -> b.getValue() - a.getValue()).limit(300).forEach(e -> list.add(e.getKey()));
+        return out;
+    }
+
+    static void count(java.util.Map<String, Integer> seen, String repo) {
+        if (REPO.matcher(repo).matches()) seen.merge(repo, 1, Integer::sum);
     }
 
     /** send: your next message in a session, as its next turn. */

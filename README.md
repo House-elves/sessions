@@ -27,6 +27,8 @@ your desk.
 - It keeps your sessions in `~/.config/sessions/sessions/`, one JSON file each, and the agents' reports in
   `~/.config/sessions/agents/`.
 - When you start a session, it checks with your gh account (`GITHUB_LOGIN`) that you can see the repo.
+- To suggest repos for a new session, it reads the repos on the [GitHub elf](https://github.com/House-elves/github)'s
+  board, from `~/.config/github/board/board.json`, which it only reads. You can still type any repo.
 - Each turn is an agent the [runner](https://github.com/House-elves/elf-runner) starts in its sandbox: Claude Code,
   in the session's clone, with no GitHub credentials and nothing of your home. It can commit there; nothing is pushed.
   It can reach the internet, as the desk's other coding agents can.
@@ -35,8 +37,9 @@ your desk.
 
 Elves can't read each other's data, so a link is two halves, handed over through the desk's navigation:
 
-- `#sessions/new/<elf>/<ref>/<title>` opens the New session form linked to that item, with its title as the start
-  of the goal. The title is %-escaped (`encodeURIComponent`, and `!'()*` too).
+- `#sessions/new/<elf>/<ref>/<title>[/<session>]` opens the New session form linked to that item, with its title as
+  the start of the goal. With a session id (`s` and digits), the session gets that id, so the other elf can keep its
+  half of the link before it starts; if it's started already, the route opens it. The title is %-escaped (`encodeURIComponent`, and `!'()*` too).
 - `#sessions/link/<session>/<elf>/<ref>/<title>` links an existing session, then opens it.
 - **Link a todo** opens the Todo list at `#todo-list/pick-session/<session>`, and **Linked to** opens
   `#<elf>/todo/<ref>`.
