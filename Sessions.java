@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
  * of the session's repo kept for that session alone (checkout slot), resuming the session's agent so it keeps its
  * context. The session's first message (its goal) goes with every turn. Without --action it lists the sessions.
  */
-@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.7.0", description = "Coding-agent sessions for Elf Desk")
+@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.7.1", description = "Coding-agent sessions for Elf Desk")
 public class Sessions implements Callable<Integer> {
 
     static final ObjectMapper JSON = new ObjectMapper();

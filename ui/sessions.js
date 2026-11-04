@@ -212,6 +212,9 @@ class SessionsTab extends LitElement {
         .t-grow { flex: 1; }
         .t-btn { all: unset; cursor: pointer; color: var(--t-dim); text-decoration: underline dotted; text-underline-offset: 3px; }
         .t-btn:hover { color: var(--t-ink); }
+        /* The desk's buttons get a light background on hover; the console's are links, and stay so. */
+        .term button.t-btn, .term button.t-btn:hover:not(:disabled), .term button.t-btn:focus {
+            background: none; border: 0; padding: 0; box-shadow: none; font: inherit; }
         .t-btn:focus-visible { outline: 1px solid var(--t-acc); }
         .t-btn[disabled] { opacity: .5; cursor: default; }
         .term .t-select { font: inherit; color: var(--t-dim); background: var(--t-bg); border: 1px solid var(--t-line); border-radius: 6px;

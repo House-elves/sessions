@@ -1,5 +1,9 @@
 # What's new
 
+## 0.7.1
+
+- Fixed: a link in the console (attach, show steps, rename…) no longer turns into a white box while the mouse is on it.
+
 ## 0.7.0
 
 - New: attach PDFs and Word files. A PDF goes to Claude Code whole, so it reads the text, tables and pictures (up to
