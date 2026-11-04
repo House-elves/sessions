@@ -25,6 +25,34 @@ async function loadSessions() {
 }
 
 const working = s => (s.turns ?? []).some(t => t.status === 'running');
+
+// Files with a message: at most this many; an image no bigger than Claude reads one (1568 pixels on the long side),
+// about 450 KB; a text file up to 100 KB. Each goes to the elf in parts: the desk takes up to 64 KB at a time.
+const MAX_FILES = 10;
+const MAX_SIDE = 1568;
+const MAX_IMAGE_CHARS = 600_000;
+const MAX_DOC_BYTES = 100_000;
+const PART = 60_000;
+
+/** An image file as a data URL that fits: PNG if it's small enough (sharpest for text), else WebP or JPEG, smaller. */
+async function fit(file) {
+    const bitmap = await createImageBitmap(file);
+    let scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    for (let tries = 0; tries < 8; tries++, scale *= 0.75) {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+        canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+        const g = canvas.getContext('2d');
+        g.fillStyle = '#fff'; // what's transparent, on white (JPEG has no transparency)
+        g.fillRect(0, 0, canvas.width, canvas.height);
+        g.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        for (const [type, quality] of [['image/png'], ['image/webp', 0.92], ['image/webp', 0.8], ['image/jpeg', 0.85]]) {
+            const url = canvas.toDataURL(type, quality);
+            if (url.startsWith(`data:${type};`) && url.length <= MAX_IMAGE_CHARS) return url;
+        }
+    }
+    throw new Error('too big to send');
+}
 const AGENT_NAMES = { claude: 'Claude Code', bob: 'IBM Bob', codex: 'Codex', pi: 'pi' };
 const agentName = id => AGENT_NAMES[id] ?? 'Claude Code';
 
@@ -69,6 +97,7 @@ class SessionsTab extends LitElement {
         _busy: { state: true }, _goalOpen: { state: true }, _editing: { state: true }, _archived: { state: true },
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
+        _files: { state: true }, _fillOk: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -131,6 +160,81 @@ class SessionsTab extends LitElement {
         .filter button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
         .tagbox { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
         .tagbox label { display: inline-flex; gap: 4px; align-items: center; font-weight: 400; }
+
+        /* An open session: a console like Claude Code's, in its colours and monospace, whatever the desk's theme. */
+        .term {
+            --t-bg: #1a1918; --t-bg2: #262524; --t-ink: #e8e6e1; --t-dim: #8f8c86; --t-line: #3b3936;
+            --t-acc: #d97757; --t-green: #6cc28a; --t-red: #e5786d; --t-warn: #e3b25c;
+            height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden;
+            background: var(--t-bg); color: var(--t-ink); border-radius: 10px; border: 1px solid var(--t-line);
+            font: 13.5px/1.55 var(--font-code); }
+        .term a { color: var(--t-acc); }
+        .term b { font-weight: 600; }
+        .t-head { padding: 6px 12px 4px; border-bottom: 1px solid var(--t-line); display: grid; gap: 4px; }
+        .t-tabs { display: flex; gap: 4px; align-items: center; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+        .t-tabs a { color: var(--t-dim); text-decoration: none; padding: 2px 10px; border-radius: 6px; max-width: 18rem;
+            overflow: hidden; text-overflow: ellipsis; }
+        .t-tabs a:hover { color: var(--t-ink); }
+        .t-tabs a.on { color: var(--t-ink); background: var(--t-bg2); }
+        .t-logo { color: var(--t-acc); margin-right: 4px; }
+        .t-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
+        .t-name { color: var(--t-ink); }
+        .t-model { color: var(--t-acc); }
+        .t-dim, .t-foot, .t-turn-foot { color: var(--t-dim); }
+        .t-acc { color: var(--t-acc); }
+        .t-warn { color: var(--t-warn); }
+        .t-red { color: var(--t-red); }
+        .t-green { color: var(--t-green); }
+        .t-tag { color: var(--t-green); }
+        .t-grow { flex: 1; }
+        .t-btn { all: unset; cursor: pointer; color: var(--t-dim); text-decoration: underline dotted; text-underline-offset: 3px; }
+        .t-btn:hover { color: var(--t-ink); }
+        .t-btn:focus-visible { outline: 1px solid var(--t-acc); }
+        .t-btn[disabled] { opacity: .5; cursor: default; }
+        .t-select { font: inherit; color: var(--t-dim); background: var(--t-bg); border: 1px solid var(--t-line); border-radius: 6px; padding: 0 4px; }
+        .t-inline { display: inline-flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+        .t-inline input:not([type=checkbox]) { font: inherit; color: var(--t-ink); background: var(--t-bg2); border: 1px solid var(--t-line);
+            border-radius: 4px; padding: 0 6px; width: auto; }
+        .t-inline label { display: inline-flex; gap: 4px; align-items: center; }
+        .t-err { color: var(--t-red); }
+        .t-goal { padding: 6px 12px; border-bottom: 1px solid var(--t-line); background: var(--t-bg2); }
+        .t-goal-row { display: flex; gap: 10px; align-items: baseline; }
+        .t-goal-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--t-ink); }
+        .t-goal-text.folded { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .t-log { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 6px; }
+        .t-you { display: flex; gap: 8px; margin-top: 12px; padding: 6px 10px; background: var(--t-bg2); border-radius: 6px; }
+        .t-you:first-child { margin-top: 0; }
+        .t-you-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+        .t-prompt { color: var(--t-dim); user-select: none; }
+        .t-line { display: flex; gap: 8px; align-items: baseline; }
+        .t-line > :last-child { min-width: 0; overflow-wrap: anywhere; }
+        .t-dot { flex: none; width: 1ch; user-select: none; }
+        .t-said { white-space: pre-wrap; color: var(--t-dim); }
+        .t-reply .md { color: var(--t-ink); font: inherit; line-height: 1.6; }
+        .t-reply .md pre, .t-reply .md code { font: inherit; background: var(--t-bg2); }
+        .t-reply .md pre { padding: 8px 10px; border-radius: 6px; overflow-x: auto; }
+        .t-reply .md h1, .t-reply .md h2, .t-reply .md h3 { font-size: 1em; font-family: inherit; }
+        .t-turn-foot { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
+        .t-working { color: var(--t-acc); }
+        .t-spin { color: var(--t-acc); display: inline-block; animation: t-spin 1.6s linear infinite; }
+        @keyframes t-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { .t-spin { animation: none; } }
+        .t-files { display: flex; gap: 8px; flex-wrap: wrap; }
+        .t-file { color: var(--t-acc); position: relative; text-decoration: none; }
+        .t-file.failed { color: var(--t-red); }
+        .t-file.sending { color: var(--t-dim); }
+        .t-file img { display: none; position: absolute; left: 0; bottom: 1.6em; max-width: 280px; max-height: 200px;
+            border: 1px solid var(--t-line); border-radius: 6px; background: #fff; z-index: 2; }
+        .t-file:hover img { display: block; }
+        .t-input { padding: 6px 12px 8px; display: grid; gap: 4px; }
+        .t-box { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--t-line); border-radius: 8px; padding: 6px 10px; }
+        .t-box:focus-within { border-color: var(--t-dim); }
+        .t-box.busy { border-style: dashed; }
+        .term .t-area { all: unset; flex: 1; min-width: 0; box-sizing: border-box; width: 100%; color: var(--t-ink); font: inherit;
+            white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; resize: none; caret-color: var(--t-acc); }
+        .term .t-area::placeholder { color: var(--t-dim); opacity: .8; }
+        .t-goal .t-area { border: 1px solid var(--t-line); border-radius: 6px; padding: 6px 8px; margin: 4px 0; }
+        .t-foot { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
     `];
 
     constructor() {
@@ -252,6 +356,8 @@ class SessionsTab extends LitElement {
         const sessions = this._sessions;
         const route = this._route ?? '';
         const current = this._current;
+        // An open session is a console that fills the window: none of the page around it.
+        if (sessions !== null && current && !route.startsWith('new')) return this._session(current);
         return html`<div class="page">
             <div class="page-top"><div>
                 <h1>Sessions</h1>
@@ -261,7 +367,6 @@ class SessionsTab extends LitElement {
             ${sessions === null ? html`<div class="skeleton" style="height:12rem"></div>` : html`
                 ${this._bar(sessions, current, route)}
                 ${route.startsWith('new') ? this._newForm(route)
-                    : current ? this._session(current)
                     : html`<div class="panel empty"><p>${/^s\//.test(route) ? 'That session isn\'t here: it was never started, or it was deleted.'
                         : sessions.length ? 'Pick a session above, or start a new one.'
                         : 'No sessions yet. Start one: pick a repo and say what it\'s for.'}</p>
@@ -385,57 +490,80 @@ class SessionsTab extends LitElement {
         if (r?.session) this._go(`s/${r.session}`, true);
     }
 
+    // ---- an open session: a console, as close to Claude Code's as a browser page gets ----
+
+    /** The open session, filling the desk's window: its tabs, its numbers and goal, the log (which scrolls), the prompt. */
     _session(s) {
-        const turns = s.turns ?? [];
         const busy = working(s);
-        const chatHeight = Math.max(360, (window.screen?.availHeight || 900) - 360);
-        return html`<section aria-label=${s.name}>
-            <div class="head">
-                ${this._editing === 'name' ? html`<form class="row" @submit=${e => this._rename(e, s)}>
-                    <input type="text" name="name" required maxlength="80" .value=${s.name} aria-label="Name">
-                    <button class="sm primary" type="submit">Rename</button>
-                    <button class="sm quiet" type="button" @click=${() => { this._editing = null; }}>Cancel</button></form>`
-                    : html`<h2>${s.name}</h2>`}
-                <div class="row">
-                    ${this._editing ? nothing : html`<button class="sm quiet" @click=${() => { this._editing = 'name'; }}>Rename</button>`}
-                    <button class="sm quiet" @click=${() => this._act('archive', { session: s.id, archived: !s.archived }, 'Couldn\'t archive it')}>
-                        ${s.archived ? 'Unarchive' : 'Archive'}</button>
-                    ${this._confirmDelete ? html`<span class="confirm">Delete it, with its clone?
-                        <button class="sm danger" ?disabled=${busy || !!this._busy} @click=${() => this._delete(s)}>${this._busy === 'delete' ? spinner : ''}Delete</button>
-                        <button class="sm quiet" @click=${() => { this._confirmDelete = false; }}>Keep it</button></span>`
-                        : html`<button class="sm quiet danger" ?disabled=${busy} title=${busy ? 'Stop it first' : ''}
-                            @click=${() => { this._confirmDelete = true; }}>Delete</button>`}
+        return html`<div class="term" style=${this._fillOk ? '' : 'height:720px'}
+                @dragover=${e => { e.preventDefault(); }} @drop=${e => this._drop(e, s)}>
+            <header class="t-head">
+                ${this._termTabs(s)}
+                <div class="t-meta">
+                    ${this._editing === 'name' ? html`<form class="t-inline" @submit=${e => this._rename(e, s)}>
+                        <input name="name" required maxlength="80" .value=${s.name} aria-label="Name">
+                        <button class="t-btn" type="submit">rename</button>
+                        <button class="t-btn" type="button" @click=${() => { this._editing = null; }}>cancel</button></form>`
+                        : html`<b class="t-name">${s.name}</b>`}
+                    <span class="t-dim">${s.repo}</span>
+                    ${this._numbers(s)}
+                    ${this._tagsOf(s)}
+                    ${s.link ? html`<span class="t-dim">linked to <a href="#" @click=${e => { e.preventDefault(); this._openLink(s.link); }}>${s.link.title || s.link.ref}</a>
+                        <button class="t-btn" @click=${() => this._act('unlink', { session: s.id }, 'Couldn\'t unlink it')}>unlink</button></span>`
+                        : html`<button class="t-btn" @click=${() => this._linkTodo(s)}>link a todo</button>`}
+                    <span class="t-grow"></span>
+                    ${this._editing ? nothing : html`<button class="t-btn" @click=${() => { this._editing = 'name'; }}>rename</button>`}
+                    <button class="t-btn" @click=${() => this._act('archive', { session: s.id, archived: !s.archived }, 'Couldn\'t archive it')}>
+                        ${s.archived ? 'unarchive' : 'archive'}</button>
+                    ${this._confirmDelete ? html`<span class="t-warn">delete it, with its clone?
+                        <button class="t-btn t-red" ?disabled=${busy || !!this._busy} @click=${() => this._delete(s)}>yes, delete</button>
+                        <button class="t-btn" @click=${() => { this._confirmDelete = false; }}>keep it</button></span>`
+                        : html`<button class="t-btn" ?disabled=${busy} title=${busy ? 'Stop it first' : ''} @click=${() => { this._confirmDelete = true; }}>delete</button>`}
                 </div>
-            </div>
-            <div class="meta">
-                <span>${s.repo}</span>${this._numbers(s)}<span>Started ${ago(s.created)}</span>
-                ${this._tagsOf(s)}
-                ${s.link ? html`<span>Linked to <a href="#" @click=${e => { e.preventDefault(); this._openLink(s.link); }}>${s.link.title || s.link.ref}</a>
-                    <button class="sm quiet" @click=${() => this._act('unlink', { session: s.id }, 'Couldn\'t unlink it')}>Unlink</button></span>`
-                    : html`<button class="sm quiet" @click=${() => this._linkTodo(s)}>Link a todo</button>`}
-            </div>
+                ${this._error ? html`<div class="t-err" role="alert">⚠ ${this._error} <button class="t-btn" @click=${() => { this._error = null; }}>dismiss</button></div>` : nothing}
+            </header>
             ${this._goal(s)}
-            <div class="chat" style="height:${chatHeight}px" aria-live="polite">
-                ${turns.map(t => this._turn(t))}
+            <div class="t-log" aria-live="polite" @scroll=${e => { this._stick = e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight < 40; }}>
+                ${(s.turns ?? []).map((t, i) => this._turn(t, i))}
             </div>
             ${this._compose(s, busy)}
-        </section>`;
+        </div>`;
     }
 
-    /** Its tags as chips, and Tags to change them: the ones in the settings, plus any it has that they no longer list. */
+    /** The sessions as a strip of tabs, a tag to show, New and Settings: one line, scrolling sideways when they're many. */
+    _termTabs(s) {
+        const sessions = this._sessions ?? [];
+        const tags = this._allTags(sessions);
+        const filter = tags.includes(this._filter) ? this._filter : '';
+        const shown = sessions.filter(x => (this._archived || !x.archived || x === s) && (tagged(x, filter) || x === s));
+        return html`<nav class="t-tabs" aria-label="Sessions">
+            <span class="t-logo">✻</span>
+            ${shown.map(x => html`<a href="#" class=${x === s ? 'on' : ''} title=${(x.prompt ?? '').split('\n')[0]}
+                aria-current=${x === s ? 'page' : 'false'} @click=${e => { e.preventDefault(); this._go(`s/${x.id}`); }}>
+                ${working(x) ? html`<span class="t-spin">✻</span>` : nothing}${x.name}</a>`)}
+            <button class="t-btn" @click=${() => this._go('new')}>+ new</button>
+            <span class="t-grow"></span>
+            ${tags.length ? html`<select class="t-select" aria-label="Show sessions tagged" @change=${e => this._setFilter(e.target.value)}>
+                <option value="" ?selected=${filter === ''}>all tags</option>
+                ${tags.map(t => html`<option value=${t} ?selected=${filter === t}>${t}</option>`)}</select>` : nothing}
+            ${sessions.some(x => x.archived) ? html`<button class="t-btn" @click=${() => { this._archived = !this._archived; }}>
+                ${this._archived ? 'hide archived' : 'archived'}</button>` : nothing}
+            <button class="t-btn" @click=${() => elf.settings()}>settings</button>
+        </nav>`;
+    }
+
+    /** Its tags, and tags to change them: the ones in the settings, plus any it has that they no longer list. */
     _tagsOf(s) {
         const mine = s.tags ?? [];
         if (!this._tagging) {
-            return html`<span class="chips">${mine.map(t => html`<span class="chip">${t}</span>`)}
-                ${this._tags.length || mine.length ? html`<button class="sm quiet" @click=${() => { this._tagging = true; }}>${mine.length ? 'Tags' : 'Add tags'}</button>` : nothing}</span>`;
+            return html`${mine.map(t => html`<span class="t-tag">#${t}</span>`)}
+                ${this._tags.length || mine.length ? html`<button class="t-btn" @click=${() => { this._tagging = true; }}>${mine.length ? 'tags' : 'add tags'}</button>` : nothing}`;
         }
         const choices = [...new Set([...this._tags, ...mine])];
-        return html`<form class="tagbox" @submit=${e => this._saveTags(e, s)}>
-            ${choices.map(t => html`<label><input type="checkbox" name="tag" value=${t} ?checked=${mine.includes(t)}
-                ?disabled=${!this._tags.includes(t) && !mine.includes(t)}>${t}</label>`)}
-            <button class="sm primary" type="submit">Save tags</button>
-            <button class="sm quiet" type="button" @click=${() => { this._tagging = false; }}>Cancel</button>
-            ${!this._tags.length ? html`<span class="hint">Set the tags you use in Settings.</span>` : nothing}
+        return html`<form class="t-inline" @submit=${e => this._saveTags(e, s)}>
+            ${choices.map(t => html`<label><input type="checkbox" name="tag" value=${t} ?checked=${mine.includes(t)}>${t}</label>`)}
+            <button class="t-btn" type="submit">save</button>
+            <button class="t-btn" type="button" @click=${() => { this._tagging = false; }}>cancel</button>
         </form>`;
     }
 
@@ -447,62 +575,73 @@ class SessionsTab extends LitElement {
         await this._act('tag', { session: s.id, tags: tags.join(',') }, 'Couldn\'t tag it');
     }
 
-    /** The goal: pinned above the chat, folded to three lines, the first message as it was sent. */
+    /** The goal: pinned above the log, folded to two lines, the first message as it was sent. */
     _goal(s) {
         const edited = !!s.goal;
         if (this._editing === 'goal') {
-            return html`<form class="goal compose" @submit=${e => this._saveGoal(e, s)}>
-                <div class="label">The session's goal: the agent gets it with every turn</div>
-                <textarea name="goal" required maxlength="20000" .value=${s.goal || s.prompt}></textarea>
-                <div class="row"><button class="sm primary" type="submit">Save goal</button>
-                    <button class="sm quiet" type="button" @click=${() => { this._editing = null; }}>Cancel</button></div>
+            return html`<form class="t-goal" @submit=${e => this._saveGoal(e, s)}>
+                <div class="t-dim">goal: the agent gets it with every turn</div>
+                <textarea class="t-area" name="goal" required maxlength="20000" rows="4" .value=${s.goal || s.prompt}></textarea>
+                <div><button class="t-btn" type="submit">save goal</button>
+                    <button class="t-btn" type="button" @click=${() => { this._editing = null; }}>cancel</button></div>
             </form>`;
         }
-        return html`<div class="goal">
-            <div class="label"><span>${edited ? html`Goal, edited ${ago(s.goalEdited)}` : 'Goal: the first message'}</span>
-                <span class="row">
-                    <button class="sm quiet" @click=${() => { this._goalOpen = !this._goalOpen; }} aria-expanded=${this._goalOpen}>
-                        ${this._goalOpen ? 'Fold' : 'Show all'}</button>
-                    <button class="sm quiet" @click=${() => { this._editing = 'goal'; }}>Edit goal</button>
-                </span></div>
-            <div class="text ${this._goalOpen ? '' : 'folded'}">${s.goal || s.prompt}</div>
-            ${edited && this._goalOpen ? html`<details><summary class="when">The first message</summary>
-                <div class="text">${s.prompt}</div></details>` : nothing}
+        return html`<div class="t-goal">
+            <div class="t-goal-row"><span class="t-acc">goal</span>${edited ? html`<span class="t-dim">edited ${ago(s.goalEdited)}</span>` : nothing}
+                <span class="t-grow"></span>
+                <button class="t-btn" @click=${() => { this._goalOpen = !this._goalOpen; }} aria-expanded=${this._goalOpen}>${this._goalOpen ? 'fold' : 'show all'}</button>
+                <button class="t-btn" @click=${() => { this._editing = 'goal'; }}>edit</button></div>
+            <div class="t-goal-text ${this._goalOpen ? '' : 'folded'}">${s.goal || s.prompt}</div>
+            ${edited && this._goalOpen ? html`<details><summary class="t-dim">the first message</summary>
+                <div class="t-goal-text">${s.prompt}</div></details>` : nothing}
         </div>`;
     }
 
     /** The model, then what it has cost, how long it has worked and how full its context is. */
     _numbers(s) {
         const n = totals(s);
-        return html`<span title=${n.model ?? ''}>${n.model ? modelName(n.model) : agentName(s.agent)}</span>
-            ${n.cost !== null ? html`<span title="What its turns have cost, at list price">$${n.cost.toFixed(2)}</span>` : nothing}
-            ${n.bobcoins !== null ? html`<span>${n.bobcoins.toFixed(2)} Bobcoins</span>` : nothing}
-            ${n.ms !== null ? html`<span title="How long the agent has worked, over all its turns">${took(n.ms)} working</span>` : nothing}
-            ${n.context !== null ? html`<span class=${n.context >= 80 ? 'chip warn' : ''}
+        return html`<span class="t-model" title=${n.model ?? ''}>${n.model ? modelName(n.model) : agentName(s.agent)}</span>
+            ${n.cost !== null ? html`<span class="t-dim" title="What its turns have cost, at list price">$${n.cost.toFixed(2)}</span>` : nothing}
+            ${n.bobcoins !== null ? html`<span class="t-dim">${n.bobcoins.toFixed(2)} Bobcoins</span>` : nothing}
+            ${n.ms !== null ? html`<span class="t-dim" title="How long the agent has worked, over all its turns">${took(n.ms)}</span>` : nothing}
+            ${n.context !== null ? html`<span class=${n.context >= 80 ? 't-warn' : 't-dim'}
                 title="How full the model's context window is after the last turn; a long session gets compacted as it fills">${n.context}% context</span>` : nothing}`;
     }
 
-    _turn(t) {
+    /** One of its lines, as Claude Code shows them: ⏺ Tool(what), or ⏺ what it said. */
+    _line(text) {
+        const tool = /^▸ ([^:]+)(?::\s?(.*))?$/s.exec(text);
+        if (tool) {
+            return html`<div class="t-line"><span class="t-dot t-green">⏺</span><span><b>${tool[1]}</b>${tool[2] ? html`(<span class="t-dim">${tool[2]}</span>)` : nothing}</span></div>`;
+        }
+        return html`<div class="t-line"><span class="t-dot">⏺</span><span class="t-said">${text}</span></div>`;
+    }
+
+    _turn(t, i) {
         const live = this._live[t.agent];
         const shown = this._lines[t.agent];
-        return html`<div class="you">${t.you}</div>
-            <div class="agent">
-                ${t.status === 'running' ? html`<div class="row">${spinner}<span>${live?.status === 'queued' ? 'Waiting for the runner…'
-                        : `Working${live?.started ? `, ${took(Date.now() - Date.parse(live.started))}` : ''}…`}</span>
-                        <button class="sm quiet" @click=${() => elf.cancelAgent(t.agent).catch(e => { this._error = e.message; })}>Stop</button></div>
-                    ${live?.lines?.length ? html`<div class="lines">${live.lines.slice(-40).join('\n')}</div>` : nothing}`
-                : t.status === 'done' ? html`<div class="md">${markdown(t.reply ?? '')}</div>`
-                : t.status === 'stopped' ? html`<p class="hint">Stopped before it answered. What it changed is still in its clone, but
-                    it won't remember this turn.</p>`
-                : html`<p class="error">It didn't answer: ${t.error ?? 'it failed'}</p>`}
-                ${t.status !== 'running' ? html`<div class="row when">
+        const files = t.files ?? [];
+        return html`<div class="t-you"><span class="t-prompt">&gt;</span><div>
+                ${t.you ? html`<div class="t-you-text">${t.you}</div>` : nothing}
+                ${files.length ? html`<div class="t-files">${files.map((f, k) => f.kind === 'image'
+                    ? html`<a class="t-file" href=${elf.imageUrl('attachments', f.file)} target="_blank" rel="noopener">[Image #${k + 1}]<img alt=${f.name} src=${elf.imageUrl('attachments', f.file)}></a>`
+                    : html`<span class="t-file">[${f.name}]</span>`)}</div>` : nothing}
+            </div></div>
+            ${t.status === 'running' ? html`
+                ${(live?.lines ?? []).slice(-60).map(l => this._line(l))}
+                <div class="t-working"><span class="t-spin">✻</span> ${live?.status === 'queued' ? 'Waiting for the runner…'
+                    : `Working… (${live?.started ? took(Date.now() - Date.parse(live.started)) : '0s'} · esc to interrupt)`}</div>`
+            : html`
+                ${shown ? shown.map(l => this._line(l)) : nothing}
+                ${t.status === 'done' ? html`<div class="t-line t-reply"><span class="t-dot">⏺</span><div class="md">${markdown(t.reply ?? '')}</div></div>`
+                    : t.status === 'stopped' ? html`<div class="t-line t-red"><span class="t-dot">⎿</span><span>Interrupted before it answered. What it changed is still in
+                        its clone, but it won't remember this turn.</span></div>`
+                    : html`<div class="t-line t-red"><span class="t-dot">⎿</span><span>It didn't answer: ${t.error ?? 'it failed'}</span></div>`}
+                <div class="t-turn-foot"><span class="t-dot">⎿</span>
                     <span>${ago(t.finished ?? t.at)}${typeof t.durationMs === 'number' ? ` · took ${took(t.durationMs)}` : ''}${
                         typeof t.cost === 'number' ? ` · $${t.cost.toFixed(2)}` : ''}${
-                        typeof t.bobcoins === 'number' ? ` · ${t.bobcoins.toFixed(2)} Bobcoins` : ''}${
-                        t.model ? ` · ${modelName(t.model)}` : ''}</span>
-                    <button class="sm quiet" @click=${() => this._toggleLines(t)}>${shown ? 'Hide what it did' : 'What it did'}</button></div>
-                    ${shown ? html`<div class="lines">${shown.length ? shown.join('\n') : 'Nothing kept.'}</div>` : nothing}` : nothing}
-            </div>`;
+                        typeof t.bobcoins === 'number' ? ` · ${t.bobcoins.toFixed(2)} Bobcoins` : ''}${t.model ? ` · ${modelName(t.model)}` : ''}</span>
+                    <button class="t-btn" @click=${() => this._toggleLines(t)}>${shown ? 'hide steps' : 'show steps'}</button></div>`}`;
     }
 
     async _toggleLines(t) {
@@ -515,39 +654,168 @@ class SessionsTab extends LitElement {
         this._lines = { ...this._lines, [t.agent]: a?.lines ?? [] };
     }
 
+    /**
+     * The prompt, as Claude Code's: type straight in, Enter sends, Ctrl+Enter (or Shift+Enter) starts a new line, Esc
+     * stops a working turn. Paste or drop images and text files, or attach them; they go with the message.
+     */
     _compose(s, busy) {
-        return html`<form class="compose" @submit=${e => this._send(e, s)}>
-            <textarea name="text" aria-label="Your message" maxlength="20000" ?disabled=${busy}
-                placeholder=${busy ? 'It\'s working on your last message…' : 'Your next message (Ctrl+Enter sends)'}
-                @input=${e => elf.store.set(`draft:${s.id}`, e.target.value).catch(() => {})}
-                @keydown=${e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.target.form.requestSubmit(); } }}></textarea>
-            <div class="row"><button class="primary" type="submit" ?disabled=${busy || !!this._busy}>${this._busy === 'send' ? spinner : ''}Send</button></div>
-        </form>`;
+        const files = this._files ?? [];
+        const n = totals(s);
+        return html`<div class="t-input">
+            ${files.length ? html`<div class="t-files">${files.map((f, k) => html`<span class="t-file ${f.status}">
+                ${f.kind === 'image' ? `[Image #${k + 1}]` : `[${f.name}]`}${f.status === 'sending' ? ' …' : f.status === 'failed' ? ` ✗ ${f.error}` : ''}
+                <button class="t-btn" title="Take it off" @click=${() => { this._files = files.filter(x => x !== f); }}>×</button></span>`)}</div>` : nothing}
+            <div class="t-box ${busy ? 'busy' : ''}"><span class="t-prompt">&gt;</span>
+                <textarea class="t-area" name="text" rows="1" aria-label="Your message" maxlength="20000" spellcheck="false"
+                    placeholder=${busy ? 'Working… type your next message; esc to interrupt' : 'Type a message: enter to send'}
+                    @input=${e => { this._grow(e.target); elf.store.set(`draft:${s.id}`, e.target.value).catch(() => {}); }}
+                    @keydown=${e => this._key(e, s, busy)} @paste=${e => this._paste(e, s)}></textarea>
+            </div>
+            <div class="t-foot">
+                <span>enter to send · ctrl+enter new line · paste or drop images and text files ·
+                    <button class="t-btn" @click=${() => this.renderRoot.querySelector('.t-pick')?.click()}>attach</button>
+                    ${busy ? html` · <button class="t-btn" @click=${() => this._stop(s)}>esc to interrupt</button>` : nothing}</span>
+                <span class="t-grow"></span>
+                <span>${n.model ? modelName(n.model) : agentName(s.agent)}${n.context !== null ? html` · <span class=${n.context >= 80 ? 't-warn' : ''}>${100 - n.context}% context left</span>` : ''}</span>
+                <input class="t-pick" type="file" multiple hidden @change=${e => { this._addFiles([...e.target.files], s); e.target.value = ''; }}>
+            </div>
+        </div>`;
     }
 
-    async updated(changed) {
-        // An unsent message is kept per browser (not shared between devices), and put back when the session opens.
-        if (changed.has('_route') || (changed.has('_sessions') && changed.get('_sessions') === null)) {
-            const s = this._current;
-            const box = this.renderRoot.querySelector('.compose textarea[name="text"]');
-            if (s && box) box.value = (await elf.store.get(`draft:${s.id}`).catch(() => '')) ?? '';
-            const chat = this.renderRoot.querySelector('.chat');
-            if (chat) chat.scrollTop = chat.scrollHeight;
+    /** Enter sends; Ctrl+Enter, Shift+Enter or Alt+Enter is a new line; Esc stops a working turn. */
+    _key(e, s, busy) {
+        if (e.key === 'Escape' && busy) {
+            e.preventDefault();
+            this._stop(s);
+            return;
+        }
+        if (e.key !== 'Enter' || e.isComposing) return;
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                const a = e.target, at = a.selectionStart;
+                a.setRangeText('\n', at, a.selectionEnd, 'end');
+                this._grow(a);
+            }
+            return;
+        }
+        e.preventDefault();
+        if (busy) {
+            this._error = 'It\'s still working on your last message: wait for it, or press esc to interrupt it.';
+            return;
+        }
+        this._send(s, e.target);
+    }
+
+    /** The prompt grows with what you type, up to a third of the window; the log keeps the rest. */
+    _grow(a) {
+        a.style.height = 'auto';
+        a.style.height = `${Math.min(a.scrollHeight, Math.round(window.innerHeight / 3))}px`;
+    }
+
+    _stop(s) {
+        const t = (s.turns ?? []).find(x => x.status === 'running');
+        if (t) elf.cancelAgent(t.agent).catch(e => { this._error = e.message; });
+    }
+
+    /** Pasted images (a screenshot) and files become attachments; pasted text goes in as text. */
+    _paste(e, s) {
+        const files = [...(e.clipboardData?.files ?? [])];
+        if (!files.length) return;
+        e.preventDefault();
+        this._addFiles(files, s);
+    }
+
+    _drop(e, s) {
+        const files = [...(e.dataTransfer?.files ?? [])];
+        if (!files.length) return;
+        e.preventDefault();
+        this._addFiles(files, s);
+    }
+
+    /** Each file starts going to the elf at once (in parts), so it's ready by the time you send. */
+    _addFiles(list, s) {
+        for (const file of list) {
+            const f = { name: file.name || (file.type.startsWith('image/') ? 'image' : 'file'),
+                kind: file.type.startsWith('image/') ? 'image' : 'text', status: 'sending' };
+            if (s.agent === 'bob' && f.kind === 'image') {
+                this._error = 'IBM Bob isn\'t shown images: attach text files only.';
+                continue;
+            }
+            if ((this._files ?? []).length >= MAX_FILES) {
+                this._error = `A message takes at most ${MAX_FILES} files.`;
+                break;
+            }
+            this._files = [...(this._files ?? []), f];
+            this._upload(file, f, s.id).catch(err => {
+                f.status = 'failed';
+                f.error = err.message;
+                this._files = [...this._files];
+            });
         }
     }
 
-    async _send(e, s) {
-        e.preventDefault();
-        const box = e.target.elements.text;
+    async _upload(file, f, session) {
+        let data;
+        if (f.kind === 'image') data = await fit(file);
+        else {
+            if (file.size > MAX_DOC_BYTES) throw new Error('too long to put in a message');
+            data = await file.text();
+            if (data.includes('\u0000')) throw new Error('not a text file (PDF and Word aren\'t supported yet)');
+        }
+        let id = '';
+        for (let at = 0; at < Math.max(1, data.length); at += PART) {
+            const done = at + PART >= data.length;
+            const r = await elf.act('attach', { session, ...(id ? { file: id } : {}), kind: f.kind, name: f.name.slice(0, 120), data: data.slice(at, at + PART), done });
+            id = r.id;
+        }
+        f.id = id;
+        f.status = 'ready';
+        this._files = [...this._files];
+    }
+
+    async updated(changed) {
+        // The open session fills the desk's window; the list and the New session form grow with their content.
+        const filling = !!this._current && !(this._route ?? '').startsWith('new');
+        if (filling !== this._filling) {
+            this._filling = filling;
+            this._fillOk = typeof elf.fill === 'function';
+            if (this._fillOk) elf.fill(filling).catch(() => { this._fillOk = false; });
+            this.requestUpdate();
+        }
+        // An unsent message is kept per browser (not shared between devices), and put back when the session opens.
+        if (changed.has('_route') || (changed.has('_sessions') && changed.get('_sessions') === null)) {
+            const s = this._current;
+            const box = this.renderRoot.querySelector('.t-input textarea');
+            if (s && box) {
+                box.value = (await elf.store.get(`draft:${s.id}`).catch(() => '')) ?? '';
+                this._grow(box);
+                box.focus();
+            }
+            this._files = [];
+            this._stick = true;
+        }
+        // The log follows what's new, unless you scrolled up to read.
+        const log = this.renderRoot.querySelector('.t-log');
+        if (log && this._stick !== false) log.scrollTop = log.scrollHeight;
+    }
+
+    async _send(s, box) {
+        const files = this._files ?? [];
+        if (files.some(f => f.status === 'sending')) {
+            this._error = 'A file is still on its way: send again in a moment.';
+            return;
+        }
+        const ready = files.filter(f => f.status === 'ready');
         const text = box.value.trim();
-        if (!text) return;
-        const r = await this._act('send', { session: s.id, text }, 'Couldn\'t send it');
+        if (!text && !ready.length) return;
+        const r = await this._act('send', { session: s.id, text: text || 'See the attached files.', ...(ready.length ? { files: ready.map(f => f.id).join(',') } : {}) }, 'Couldn\'t send it');
         if (r) {
             box.value = '';
+            this._grow(box);
+            this._files = [];
+            this._stick = true;
             elf.store.set(`draft:${s.id}`, '').catch(() => {});
-            await this.updateComplete;
-            const chat = this.renderRoot.querySelector('.chat');
-            if (chat) chat.scrollTop = chat.scrollHeight;
         }
     }
 

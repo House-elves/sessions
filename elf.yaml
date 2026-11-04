@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.5.0
+version: 0.6.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -52,7 +52,7 @@ dry-run: list
 tab:
   page: ui/sessions.js
   card: true
-data: [sessions, agents]
+data: [sessions, agents, attachments]
 # Each turn is an agent; when one ends, the runner calls agent-done with its id, which keeps its reply on the session.
 agents:
   done: agent-done
@@ -71,6 +71,8 @@ actions:
       repo: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", max: 140}
       prompt: {pattern: "[\\s\\S]{1,20000}", max: 20000}
       agent: {one-of: [claude, bob], optional: true}
+      # Files you attached to the first message (attach), comma-separated ids.
+      files: {pattern: "([0-9a-f]{16}(,[0-9a-f]{16}){0,9})?", optional: true, max: 200}
       link: {pattern: "([a-z0-9][a-z0-9-]{0,40}:[A-Za-z0-9._-]{1,80})?", optional: true, max: 130}
       linkTitle: {pattern: "\\P{Cntrl}{0,300}", optional: true, max: 300}
       # Some of the tags in its settings, comma-separated.
@@ -92,6 +94,19 @@ actions:
     params:
       session: {pattern: "s[0-9]{10,16}"}
       text: {pattern: "[\\s\\S]{1,20000}", max: 20000}
+      files: {pattern: "([0-9a-f]{16}(,[0-9a-f]{16}){0,9})?", optional: true, max: 200}
+  attach:
+    label: Keep a file you attached to a message
+    args: [--action=attach]
+    ask: false
+    params:
+      # A new session's first message has no session yet: its files wait under "new".
+      session: {pattern: "(s[0-9]{10,16}|new)"}
+      file: {pattern: "([0-9a-f]{16})?", optional: true}
+      kind: {one-of: [image, text]}
+      name: {pattern: "[^/\\\\\\p{Cntrl}]{1,120}", max: 120}
+      data: {pattern: "[\\s\\S]{0,60000}", max: 60000}
+      done: {kind: bool}
   agent-done:
     label: Keep a turn's reply
     args: [--action=agent-done]

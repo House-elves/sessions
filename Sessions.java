@@ -35,12 +35,21 @@ import java.util.regex.Pattern;
  * of the session's repo kept for that session alone (checkout slot), resuming the session's agent so it keeps its
  * context. The session's first message (its goal) goes with every turn. Without --action it lists the sessions.
  */
-@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.5.0", description = "Coding-agent sessions for Elf Desk")
+@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.6.0", description = "Coding-agent sessions for Elf Desk")
 public class Sessions implements Callable<Integer> {
 
     static final ObjectMapper JSON = new ObjectMapper();
     static final Path SESSIONS = Config.DIR.resolve("sessions");
     static final Path AGENTS = Config.DIR.resolve("agents");
+    /** Files attached to messages: <session>-<id>.<ext>, with <session>-<id>.meta.json ({name, kind}). */
+    static final Path ATTACHMENTS = Config.DIR.resolve("attachments");
+    static final Pattern FILE_ID = Pattern.compile("[0-9a-f]{16}");
+    /** An image as the runner shows it to Claude: at most 3.75 MB, so about 5 MB as a data URL. */
+    static final int MAX_IMAGE_CHARS = 5_100_000;
+    static final int MAX_IMAGES = 4;
+    /** A text file goes into the message: at most this much each, and all of a message's together. */
+    static final int MAX_DOC_CHARS = 100_000, MAX_DOCS_CHARS = 150_000;
+    static final int MAX_FILES = 10;
     /** Outside the data folders the tab reads: one action at a time changes the sessions. */
     static final Path LOCK = Config.DIR.resolve("sessions.lock");
     static final Pattern ID = Pattern.compile("s[0-9]{10,16}");
@@ -115,6 +124,7 @@ public class Sessions implements Callable<Integer> {
                 case "link-context" -> linkContext(in);
                 case "send" -> send(in);
                 case "agent-done" -> agentDone(in);
+                case "attach" -> attach(in);
                 case "rename" -> rename(in);
                 case "archive" -> archive(in);
                 case "tag" -> tag(config, in);
@@ -157,7 +167,7 @@ public class Sessions implements Callable<Integer> {
         setLink(s, in);
         setTags(config, s, in);
         s.putArray("turns");
-        return turn(s, prompt);
+        return turn(s, prompt, in.path("files").asText(""));
     }
 
     /**
@@ -265,12 +275,127 @@ public class Sessions implements Callable<Integer> {
         return out;
     }
 
+    /**
+     * attach: a file pasted or picked for a message, in parts (the desk takes up to 64 KB at a time from the tab): the
+     * first part starts it and answers its id, each part adds to it, and the one marked done checks it and keeps it.
+     * An image (a data URL) must really be a PNG, JPEG, GIF or WebP; a text file must be text. A new session's first
+     * message keeps its files under "new" until create moves them to the session.
+     */
+    static JsonNode attach(JsonNode in) throws IOException {
+        String session = in.path("session").asText("");
+        if (!session.equals("new")) load(session); // it must be there
+        String kind = in.path("kind").asText("");
+        if (!List.of("image", "text").contains(kind)) throw new IllegalArgumentException("A file is an image or text");
+        Files.createDirectories(ATTACHMENTS);
+        String id = in.path("file").asText("");
+        if (id.isEmpty()) {
+            // Ones left from a message never sent go after a day.
+            java.time.Instant old = Instant.now().minus(java.time.Duration.ofDays(1));
+            try (var files = Files.list(ATTACHMENTS)) {
+                for (Path f : files.toList()) {
+                    String n = f.getFileName().toString();
+                    if ((n.endsWith(".part") || n.startsWith("new-")) && Files.getLastModifiedTime(f).toInstant().isBefore(old)) Files.deleteIfExists(f);
+                }
+            }
+            id = "%016x".formatted(new java.security.SecureRandom().nextLong());
+            write(ATTACHMENTS.resolve(session + "-" + id + ".meta.json"),
+                    JSON.createObjectNode().put("name", oneLine(in.path("name").asText("file"), 120)).put("kind", kind));
+        } else if (!FILE_ID.matcher(id).matches() || !Files.isRegularFile(ATTACHMENTS.resolve(session + "-" + id + ".part"))) {
+            throw new IllegalStateException("That file is gone: attach it again");
+        }
+        Path part = ATTACHMENTS.resolve(session + "-" + id + ".part");
+        String data = in.path("data").asText("");
+        long max = kind.equals("image") ? MAX_IMAGE_CHARS : MAX_DOC_CHARS * 4L;
+        if ((Files.exists(part) ? Files.size(part) : 0) + data.length() > max) {
+            Files.deleteIfExists(part);
+            throw new IllegalArgumentException(kind.equals("image") ? "That image is too big" : "That file is too long to put in a message");
+        }
+        Files.writeString(part, data, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        if (!in.path("done").asBoolean(false)) return JSON.createObjectNode().put("id", id);
+        String all = Files.readString(part, StandardCharsets.UTF_8);
+        Files.deleteIfExists(part);
+        Path meta = ATTACHMENTS.resolve(session + "-" + id + ".meta.json");
+        ObjectNode m = (ObjectNode) JSON.readTree(meta.toFile());
+        if (kind.equals("image")) {
+            Matcher d = Pattern.compile("data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)").matcher(all);
+            if (!d.matches()) throw new IllegalArgumentException("That isn't a PNG, JPEG, GIF or WebP image");
+            byte[] bytes = java.util.Base64.getDecoder().decode(d.group(2));
+            if (!d.group(1).equals(imageType(bytes)) || bytes.length > 3_750_000) throw new IllegalArgumentException("That isn't a PNG, JPEG, GIF or WebP image of at most 3.75 MB");
+            String file = session + "-" + id + "." + d.group(1).substring(6);
+            Files.write(ATTACHMENTS.resolve(file), bytes);
+            m.put("file", file).put("type", d.group(1));
+        } else {
+            if (all.length() > MAX_DOC_CHARS) throw new IllegalArgumentException("That file is too long to put in a message");
+            if (all.chars().anyMatch(c -> c == 0)) throw new IllegalArgumentException("That isn't a text file");
+            String file = session + "-" + id + ".txt";
+            Files.writeString(ATTACHMENTS.resolve(file), all, StandardCharsets.UTF_8);
+            m.put("file", file).put("type", "text/plain");
+        }
+        write(meta, m);
+        return JSON.createObjectNode().put("id", id).put("kept", true).put("file", m.path("file").asText());
+    }
+
+    /** What the bytes are, by how they start: image/png, image/jpeg, image/gif, image/webp, or null. */
+    static String imageType(byte[] b) {
+        if (starts(b, 0, 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A)) return "image/png";
+        if (starts(b, 0, 0xFF, 0xD8, 0xFF)) return "image/jpeg";
+        if (starts(b, 0, 'G', 'I', 'F', '8')) return "image/gif";
+        if (starts(b, 0, 'R', 'I', 'F', 'F') && starts(b, 8, 'W', 'E', 'B', 'P')) return "image/webp";
+        return null;
+    }
+
+    static boolean starts(byte[] b, int at, int... magic) {
+        if (b.length < at + magic.length) return false;
+        for (int k = 0; k < magic.length; k++) if ((b[at + k] & 0xFF) != magic[k]) return false;
+        return true;
+    }
+
+    /**
+     * The files a message lists (ids, comma-separated), kept for this session: their meta, with the file each is in.
+     * A new session's first message finds them under "new" and they move to the session.
+     */
+    static List<ObjectNode> files(String session, String ids) throws IOException {
+        List<ObjectNode> out = new ArrayList<>();
+        if (ids.isBlank()) return out;
+        List<String> list = List.of(ids.split(","));
+        if (list.size() > MAX_FILES) throw new IllegalArgumentException("A message takes at most " + MAX_FILES + " files");
+        for (String id : list) {
+            if (!FILE_ID.matcher(id).matches()) throw new IllegalArgumentException("Not a file: " + id);
+            Path meta = ATTACHMENTS.resolve(session + "-" + id + ".meta.json");
+            if (!Files.isRegularFile(meta)) {
+                // The first message of a session started just now: its files were kept before it had an id.
+                Path waiting = ATTACHMENTS.resolve("new-" + id + ".meta.json");
+                if (!Files.isRegularFile(waiting)) throw new IllegalStateException("A file you attached is gone: attach it again");
+                ObjectNode m = (ObjectNode) JSON.readTree(waiting.toFile());
+                String from = m.path("file").asText(""), to = from.replaceFirst("^new-", session + "-");
+                if (!from.startsWith("new-" + id + ".")) throw new IllegalStateException("A file you attached isn't ready yet: attach it again");
+                Files.move(ATTACHMENTS.resolve(from), ATTACHMENTS.resolve(to), StandardCopyOption.REPLACE_EXISTING);
+                m.put("file", to);
+                write(meta, m);
+                Files.deleteIfExists(waiting);
+            }
+            ObjectNode m = (ObjectNode) JSON.readTree(meta.toFile());
+            if (!m.path("file").asText("").startsWith(session + "-" + id + ".")) throw new IllegalStateException("A file you attached isn't ready yet: attach it again");
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** Written whole or not at all. */
+    static void write(Path file, JsonNode n) throws IOException {
+        Files.createDirectories(file.getParent());
+        Path tmp = file.resolveSibling(file.getFileName() + ".new");
+        Files.writeString(tmp, JSON.writeValueAsString(n));
+        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+    }
+
     /** send: your next message in a session, as its next turn. */
     static JsonNode send(JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
         String text = in.path("text").asText("").strip();
-        if (text.isEmpty() || text.length() > MAX_TEXT) throw new IllegalArgumentException("Write a message");
-        return turn(s, text);
+        String files = in.path("files").asText("");
+        if ((text.isEmpty() && files.isEmpty()) || text.length() > MAX_TEXT) throw new IllegalArgumentException("Write a message");
+        return turn(s, text, files);
     }
 
     /**
@@ -278,7 +403,7 @@ public class Sessions implements Callable<Integer> {
      * own clone (slot), resumes the agent's session from the last turn that finished, answers in plain text (no
      * schema) and is given the session's goal again, so a long session doesn't lose it.
      */
-    static JsonNode turn(ObjectNode s, String text) throws IOException {
+    static JsonNode turn(ObjectNode s, String text, String fileIds) throws IOException {
         // An older runner doesn't know agent, and would quietly run Claude Code instead: refused before anything is saved.
         boolean bob = s.path("agent").asText("claude").equals("bob");
         if (bob && !runnerAtLeast(0, 47)) throw new IllegalStateException("IBM Bob sessions need runner 0.47.0 or later: update the desk");
@@ -289,15 +414,37 @@ public class Sessions implements Callable<Integer> {
         }
         int n = turns.isEmpty() ? 1 : turns.get(turns.size() - 1).path("n").asInt() + 1;
         String agentId = s.path("id").asText() + "-t" + n;
-        turns.addObject().put("n", n).put("you", text).put("at", Instant.now().toString()).put("agent", agentId)
+        // Its files: images shown to the agent with the message, text files put in the message.
+        List<ObjectNode> files = files(s.path("id").asText(), fileIds);
+        ArrayNode images = JSON.createArrayNode();
+        StringBuilder docs = new StringBuilder();
+        for (ObjectNode f : files) {
+            Path p = ATTACHMENTS.resolve(f.path("file").asText());
+            if (f.path("kind").asText().equals("image")) {
+                if (bob) throw new IllegalArgumentException("IBM Bob isn't shown images: attach text files only");
+                if (images.size() >= MAX_IMAGES) throw new IllegalArgumentException("A message takes at most " + MAX_IMAGES + " images");
+                images.addObject().put("type", f.path("type").asText())
+                        .put("data", java.util.Base64.getEncoder().encodeToString(Files.readAllBytes(p)));
+            } else {
+                docs.append("\n\n<attached-file name=\"").append(f.path("name").asText().replace("\"", "'")).append("\">\n")
+                        .append(Files.readString(p).replace("</attached-file", "<\\/attached-file")).append("\n</attached-file>");
+            }
+        }
+        if (docs.length() > MAX_DOCS_CHARS) throw new IllegalArgumentException("The attached text files are too long for one message");
+        ObjectNode turnNode = turns.addObject().put("n", n).put("you", text).put("at", Instant.now().toString()).put("agent", agentId)
                 .put("status", "running");
+        if (!files.isEmpty()) {
+            ArrayNode list = turnNode.putArray("files");
+            for (ObjectNode f : files) list.addObject().put("name", f.path("name").asText()).put("kind", f.path("kind").asText()).put("file", f.path("file").asText());
+        }
         while (turns.size() > MAX_TURNS) turns.remove(0);
         save(s);
 
         ObjectNode agent = JSON.createObjectNode().put("id", agentId);
         agent.putObject("checkout").put("repo", s.path("repo").asText()).put("number", 0).put("kind", "REPO")
                 .put("slot", s.path("id").asText());
-        agent.put("prompt", text);
+        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs);
+        if (!images.isEmpty()) agent.set("images", images);
         // The session keeps the agent it started with: neither can resume the other's.
         if (bob) agent.put("agent", "bob");
         if (n > 1) agent.put("goal", goal(s));
@@ -489,6 +636,11 @@ public class Sessions implements Callable<Integer> {
             }
         }
         Files.deleteIfExists(file(id));
+        if (Files.isDirectory(ATTACHMENTS)) {
+            try (var files = Files.list(ATTACHMENTS)) {
+                for (Path f : files.toList()) if (f.getFileName().toString().startsWith(id + "-")) Files.deleteIfExists(f);
+            }
+        }
         return JSON.createObjectNode().put("deleted", id);
     }
 

@@ -1,5 +1,14 @@
 # What's new
 
+## 0.6.0
+
+- New: an open session is a console, as close to Claude Code's as a browser gets: its colours and monospace, the
+  conversation as ⏺ lines, and the prompt at the bottom. It fills the desk's window, and only the conversation
+  scrolls (desk 0.6.38).
+- New: type straight into the prompt. Enter sends, Ctrl+Enter starts a new line, Esc interrupts a working turn.
+- New: paste a screenshot or drop files on the session, or attach them: images go to Claude Code with your message
+  (up to 4), text files go into the message.
+
 ## 0.5.0
 
 - New: a session shows its model (like Opus 5.5), what it has cost, how long its agent has worked, and how full its
