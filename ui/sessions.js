@@ -120,7 +120,7 @@ class SessionsTab extends LitElement {
         _busy: { state: true }, _goalOpen: { state: true }, _editing: { state: true }, _archived: { state: true },
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
-        _files: { state: true }, _fillOk: { state: true },
+        _files: { state: true }, _fillOk: { state: true }, _dragging: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -175,6 +175,16 @@ class SessionsTab extends LitElement {
         form.new .tagbox label { display: inline-flex; flex-direction: row; font-size: 14px; color: var(--ink); }
         form.new .hint { margin: 0; }
         form.new .row { padding-top: 4px; }
+        /* Files for the first message: drop them anywhere on the form, or choose them. */
+        .dropbox { display: grid; gap: 8px; padding: 14px 16px; border: 1.5px dashed var(--line, #ccc); border-radius: 8px;
+            font-size: 13px; color: var(--muted); transition: border-color .12s, background .12s; }
+        form.new.dragging .dropbox { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--ink); }
+        .dropbox .files { display: flex; gap: 8px; flex-wrap: wrap; }
+        .dropbox .file { display: inline-flex; gap: 6px; align-items: center; padding: 2px 8px; border-radius: 6px;
+            background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--ink); }
+        .dropbox .file.failed { color: var(--danger, #c0392b); }
+        .dropbox .file button { background: none; border: 0; padding: 0; cursor: pointer; color: inherit; font: inherit; }
+        .linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
         .confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .panel.empty { display: grid; gap: 16px; justify-items: start; padding: 22px 24px; margin-top: 4px; }
         .panel.empty p { margin: 0; }
@@ -247,6 +257,11 @@ class SessionsTab extends LitElement {
         @keyframes t-spin { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: reduce) { .t-spin { animation: none; } }
         .t-files { display: flex; gap: 8px; flex-wrap: wrap; }
+        /* Dragging files over the console: it says where they go. */
+        .term { position: relative; }
+        .t-dropzone { position: absolute; inset: 8px; z-index: 5; pointer-events: none; display: grid; place-items: center;
+            border: 2px dashed var(--t-acc); border-radius: 8px; background: color-mix(in srgb, var(--t-bg) 82%, transparent);
+            color: var(--t-acc); font-size: 15px; text-align: center; }
         .t-file { color: var(--t-acc); position: relative; text-decoration: none; }
         .t-file.failed { color: var(--t-red); }
         .t-file.sending { color: var(--t-dim); }
@@ -441,7 +456,8 @@ class SessionsTab extends LitElement {
         const agents = this._options?.agents ?? [{ id: 'claude', label: 'Claude Code', installed: true, sessions: true }];
         const usable = a => a.installed && a.sessions;
         const chosen = agents.find(a => a.id === this._options?.agent && usable(a)) ?? agents.find(usable);
-        return html`<form class="new panel" @submit=${e => this._create(e, link)}>
+        return html`<form class="new panel ${this._dragging ? 'dragging' : ''}" @submit=${e => this._create(e, link)}
+                @dragover=${e => this._dragOver(e)} @drop=${e => this._drop(e, () => this._newSession(e.currentTarget))}>
             <h2>New session</h2>
             ${link ? html`<p class="hint">Linked to ${link.title || link.ref} (${link.elf}).</p>` : nothing}
             <label>Name <input type="text" name="name" required maxlength="80" .value=${link?.title?.slice(0, 80) ?? ''}
@@ -464,6 +480,7 @@ class SessionsTab extends LitElement {
                 .value=${this._context?.prompt ?? link?.title ?? ''}></textarea>
                 ${link && this._context?.prompt ? html`<span class="field-hint">From the ${link.elf === 'todo-list' ? 'todo' : link.elf}: its
                     description, checklist and issues. Change it as you like.</span>` : nothing}</label>
+            ${this._newFiles()}
             <p class="hint">The agent works in its own clone of the repo, in the runner's sandbox, with no GitHub credentials:
                 it commits there, and nothing is pushed.</p>
             <div class="row">
@@ -513,6 +530,13 @@ class SessionsTab extends LitElement {
         if (f.get('agent')) params.agent = String(f.get('agent'));
         const tags = f.getAll('tag').map(String);
         if (tags.length) params.tags = tags.join(',');
+        const files = this._files ?? [];
+        if (files.some(x => x.status === 'sending')) {
+            this._error = 'A file is still on its way: start it again in a moment.';
+            return;
+        }
+        const ready = files.filter(x => x.status === 'ready');
+        if (ready.length) params.files = ready.map(x => x.id).join(',');
         const r = await this._act('create', params, 'Couldn\'t start it');
         if (r?.session) this._go(`s/${r.session}`, true);
     }
@@ -523,7 +547,8 @@ class SessionsTab extends LitElement {
     _session(s) {
         const busy = working(s);
         return html`<div class="term" style=${this._fillOk ? '' : 'height:720px'}
-                @dragover=${e => { e.preventDefault(); }} @drop=${e => this._drop(e, s)}>
+                @dragover=${e => this._dragOver(e)} @drop=${e => this._drop(e, s)}>
+            ${this._dragging ? html`<div class="t-dropzone">Drop to attach<br>images, PDFs, Word and text files</div>` : nothing}
             <header class="t-head">
                 ${this._termTabs(s)}
                 <div class="t-meta">
@@ -699,7 +724,7 @@ class SessionsTab extends LitElement {
                     @keydown=${e => this._key(e, s, busy)} @paste=${e => this._paste(e, s)}></textarea>
             </div>
             <div class="t-foot">
-                <span>enter to send · ctrl+enter new line · paste or drop images, PDFs, Word and text files ·
+                <span>enter to send · ctrl+enter new line · paste or drag in images, PDFs, Word and text files ·
                     <button class="t-btn" @click=${() => this.renderRoot.querySelector('.t-pick')?.click()}>attach</button>
                     ${busy ? html` · <button class="t-btn" @click=${() => this._stop(s)}>esc to interrupt</button>` : nothing}</span>
                 <span class="t-grow"></span>
@@ -753,11 +778,40 @@ class SessionsTab extends LitElement {
         this._addFiles(files, s);
     }
 
+    /** Files dragged over the console or the New session form: show where they go while they're over it. */
+    _dragOver(e) {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        this._dragging = true;
+        clearTimeout(this._dragTimer);
+        this._dragTimer = setTimeout(() => { this._dragging = false; }, 250);
+    }
+
     _drop(e, s) {
+        this._dragging = false;
         const files = [...(e.dataTransfer?.files ?? [])];
         if (!files.length) return;
         e.preventDefault();
-        this._addFiles(files, s);
+        this._addFiles(files, typeof s === 'function' ? s() : s);
+    }
+
+    /** A new session's first message has no session yet: its files wait under "new", for the agent picked on the form. */
+    _newSession(form) {
+        return { id: 'new', agent: form?.querySelector('select[name=agent]')?.value || 'claude' };
+    }
+
+    _newFiles() {
+        const files = this._files ?? [];
+        return html`<div class="dropbox">
+            <span>Files for the first message: drop images, PDFs, Word or text files on the form, or
+                <button type="button" class="linkish" @click=${() => this.renderRoot.querySelector('.new-pick')?.click()}>choose files</button>.</span>
+            ${files.length ? html`<div class="files">${files.map(f => html`<span class="file ${f.status}">${f.name}${
+                f.status === 'sending' ? ` ${f.sent ?? 0}%` : f.status === 'failed' ? ` ✗ ${f.error}` : ''}
+                <button type="button" title="Take it off" @click=${() => { this._files = files.filter(x => x !== f); }}>×</button></span>`)}</div>` : nothing}
+            <input class="new-pick" type="file" multiple hidden
+                @change=${e => { this._addFiles([...e.target.files], this._newSession(e.target.form)); e.target.value = ''; }}>
+        </div>`;
     }
 
     /** Each file starts going to the elf at once (in parts), so it's ready by the time you send. */

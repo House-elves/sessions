@@ -1,5 +1,10 @@
 # What's new
 
+## 0.7.2
+
+- New: drag files onto an open session and it shows where they go ("Drop to attach"); let go and they upload, as with
+  attach (no file dialog to wait for).
+- New: the New session form takes files for the first message: drop them anywhere on the form, or choose them.
 ## 0.7.1
 
 - Fixed: a link in the console (attach, show steps, rename…) no longer turns into a white box while the mouse is on it.
