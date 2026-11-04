@@ -1,5 +1,10 @@
 # What's new
 
+## 0.3.1
+
+- New: when IBM Bob (or Claude Code) isn't installed here, the New session form offers Install. The desk asks you
+  first and says the npm command it runs, then what's left for you, such as its login (desk with runner 0.48.0).
+
 ## 0.3.0
 
 - New: pick the coding agent for a session, Claude Code or IBM Bob, with your default in Settings (Coding agent).

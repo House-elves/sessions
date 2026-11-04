@@ -255,7 +255,8 @@ What `elf` gives the page:
 - **Commands and actions:** `elf.run(command, params)` starts a command, and `elf.state()` says what's running and what
   failed. `elf.act(action, params)` asks for an action; it rejects with `cancelled` when you said no.
 - **Updates:** `elf.onChange(cb)` calls back when a run starts or ends, or a data folder changed.
-- **Agents:** `elf.agent(id)`, `elf.cancelAgent(id)` and `elf.removeSlot(repo, slot)`.
+- **Agents:** `elf.agent(id)`, `elf.cancelAgent(id)` and `elf.removeSlot(repo, slot)`. `elf.installAgent(agent)`
+  installs a coding agent that isn't here, after the desk asks you (runner 0.48.0 and later).
 - **Settings:** `elf.settings(keys, heading)` opens the desk's settings for it, and `elf.values()` gives their values,
   without secrets.
 - **Navigation:** `elf.route()`, `elf.go(route)` and `elf.onRoute(cb)` for places in the tab that Back and links

@@ -36,7 +36,7 @@ class SessionsTab extends LitElement {
         _sessions: { state: true }, _route: { state: true }, _error: { state: true }, _live: { state: true },
         _busy: { state: true }, _goalOpen: { state: true }, _editing: { state: true }, _archived: { state: true },
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
-        _tagging: { state: true }, _options: { state: true },
+        _tagging: { state: true }, _options: { state: true }, _installed: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -287,6 +287,7 @@ class SessionsTab extends LitElement {
                     !a.installed ? ' (not installed)' : !a.sessions ? ' (not for sessions yet)' : ''}</option>`)}
                 </select>
                 <span class="field-hint">The session keeps this agent. Your default is in Settings.</span></label>
+            ${this._installable(agents)}
             <label>What it's for <textarea name="prompt" required maxlength="20000"
                 placeholder="The first message. It stays pinned above the chat, and the agent gets it with every turn."
                 .value=${link?.title ?? ''}></textarea></label>
@@ -297,6 +298,37 @@ class SessionsTab extends LitElement {
                 <button class="quiet" type="button" @click=${() => this._go('')}>Cancel</button>
             </div>
         </form>`;
+    }
+
+    /**
+     * Agents that can run a session but aren't installed here: Install, through the desk (it asks you first and says
+     * what it runs), then what's left for you, such as its login.
+     */
+    _installable(agents) {
+        const missing = agents.filter(a => a.sessions && !a.installed);
+        const done = this._installed;
+        if (!missing.length && !done) return nothing;
+        return html`<div class="tagbox">
+            ${done ? html`<span class="chip ok">${done.label} installed</span>${done.next ? html`<span class="field-hint">${done.next}</span>` : nothing}` : nothing}
+            ${missing.map(a => html`<span class="field-hint">${a.label} isn't installed here.</span>
+                <button type="button" class="sm" ?disabled=${!!this._busy} @click=${() => this._installAgent(a)}>
+                    ${this._busy === `install:${a.id}` ? spinner : ''}Install ${a.label}</button>`)}
+        </div>`;
+    }
+
+    async _installAgent(a) {
+        this._busy = `install:${a.id}`;
+        try {
+            const r = await elf.installAgent(a.id);
+            this._installed = { label: a.label, next: r?.next ?? '' };
+            this._options = null;
+            const o = await elf.act('new-options', {}).catch(() => null);
+            this._options = o ?? {};
+        } catch (e) {
+            if (!e.cancelled && e.message !== 'cancelled') this._error = `Couldn't install ${a.label}: ${e.message}`;
+        } finally {
+            this._busy = null;
+        }
     }
 
     async _create(e, link) {
