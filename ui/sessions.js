@@ -260,7 +260,7 @@ class SessionsTab extends LitElement {
         /* Dragging files over the console: it says where they go. */
         .term { position: relative; }
         .t-dropzone { position: absolute; inset: 8px; z-index: 5; pointer-events: none; display: grid; place-items: center;
-            border: 2px dashed var(--t-acc); border-radius: 8px; background: color-mix(in srgb, var(--t-bg) 82%, transparent);
+            border: 2px dashed var(--t-acc); border-radius: 8px; background: color-mix(in srgb, var(--t-bg) 94%, transparent);
             color: var(--t-acc); font-size: 15px; text-align: center; }
         .t-file { color: var(--t-acc); position: relative; text-decoration: none; }
         .t-file.failed { color: var(--t-red); }
