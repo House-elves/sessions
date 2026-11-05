@@ -129,6 +129,9 @@ public class Sessions implements Callable<Integer> {
                 case "send" -> send(in);
                 case "agent-done" -> agentDone(in);
                 case "unqueue" -> unqueue(in);
+                case "push-preview" -> pushPreview(config, in);
+                case "push" -> push(config, in);
+                case "push-done" -> pushDone(config, in);
                 case "attach" -> attach(in);
                 case "rename" -> rename(in);
                 case "archive" -> archive(in);
@@ -552,6 +555,173 @@ public class Sessions implements Callable<Integer> {
         return false;
     }
 
+    // ---- push: the session's commits to a branch on GitHub, with a draft PR ----
+
+    static final Pattern SHA = Pattern.compile("[0-9a-f]{40}");
+
+    /**
+     * The agent's work as the runner last reported it: its commits on the repo's default branch (one commit, the runner
+     * squashes a repo's work), from the newest turn that finished with some.
+     */
+    static JsonNode work(ObjectNode s) throws IOException {
+        JsonNode turns = s.path("turns");
+        for (int k = turns.size() - 1; k >= 0; k--) {
+            JsonNode t = turns.get(k);
+            if (!t.path("status").asText().equals("done")) continue;
+            Path f = AGENTS.resolve(t.path("agent").asText() + ".json");
+            if (!Files.isRegularFile(f)) continue;
+            JsonNode git = JSON.readTree(f.toFile()).path("git");
+            if (git.path("error").isTextual()) {
+                // Commits with no history in common with the repo (the agent started a new project in its clone): no
+                // branch of the repo can take them as a PR.
+                if (git.path("error").asText().contains("merge-base")) throw new IllegalStateException("The agent's commits don't "
+                        + "share any history with " + s.path("repo").asText() + "'s default branch (it started afresh), so they "
+                        + "can't go to a branch and PR there");
+                throw new IllegalStateException(git.path("error").asText());
+            }
+            if (git.path("commits").isEmpty()) continue;
+            if (!SHA.matcher(git.path("from").asText()).matches() || !SHA.matcher(git.path("to").asText()).matches()
+                    || !BRANCH.matcher(git.path("base").asText("")).matches()) throw new IllegalStateException("The runner's report of its commits is incomplete");
+            return git;
+        }
+        throw new IllegalStateException("There are no commits to push yet: ask the agent to commit its work");
+    }
+
+    static final Pattern BRANCH = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._/-]{0,100}");
+
+    /** The branch a session pushes to: session/<its name>, kept once it's pushed, so a rename doesn't move it. */
+    static String branch(ObjectNode s) {
+        if (BRANCH.matcher(s.path("branch").asText("")).matches()) return s.path("branch").asText();
+        String slug = s.path("name").asText("").toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-+|-+$", "");
+        if (slug.length() > 40) slug = slug.substring(0, 40).replaceAll("-+$", "");
+        return "session/" + (slug.isEmpty() ? s.path("id").asText() : slug);
+    }
+
+    static String token(Config config) throws Exception {
+        if (config.githubLogin.isEmpty()) throw new IllegalStateException("Set your GitHub account in Sessions' settings to push");
+        String token = run(List.of("gh", "auth", "token", "-u", config.githubLogin), null);
+        if (token == null || token.isBlank() || token.contains(" ")) {
+            throw new IllegalStateException("Log gh in as " + config.githubLogin + " (gh auth login), or change the account in Sessions' settings");
+        }
+        return token;
+    }
+
+    /** Where it goes: the repo itself when you can push to it, or your fork of it. */
+    static String headRepo(Config config, ObjectNode s, String token) throws Exception {
+        if (REPO.matcher(s.path("headRepo").asText("")).matches()) return s.path("headRepo").asText();
+        String repo = s.path("repo").asText();
+        if ("true".equals(run(List.of("gh", "api", "repos/" + repo, "--jq", ".permissions.push"), token))) return repo;
+        String fork = config.githubLogin + "/" + repo.substring(repo.indexOf('/') + 1);
+        String parent = run(List.of("gh", "api", "repos/" + fork, "--jq", ".parent.full_name"), token);
+        if (parent != null && parent.strip().equalsIgnoreCase(repo)) return fork;
+        throw new IllegalStateException(config.githubLogin + " can't push to " + repo + " and has no fork of it at " + fork
+                + ": fork it on GitHub first");
+    }
+
+    static ObjectNode preview(Config config, ObjectNode s, String token) throws Exception {
+        harvest(s);
+        if (running(s)) throw new IllegalStateException("It's still working: push when this turn is done");
+        JsonNode git = work(s);
+        String pushed = s.path("pushed").asText("");
+        ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("repo", s.path("repo").asText())
+                .put("base", git.path("base").asText()).put("headRepo", headRepo(config, s, token)).put("headRef", branch(s))
+                .put("from", git.path("from").asText()).put("to", git.path("to").asText()).put("as", config.githubLogin)
+                .put("update", !pushed.isEmpty()).put("already", pushed.equals(git.path("to").asText()));
+        out.put("target", out.path("headRepo").asText() + ":" + out.path("headRef").asText());
+        out.set("commits", git.path("commits"));
+        out.put("diffstat", git.path("diffstat").asText(""));
+        out.put("patch", clip(git.path("patch").asText(""), 150_000));
+        out.put("patchCut", git.path("patchCut").asBoolean(false) || git.path("patch").asText("").length() > 150_000);
+        if (s.path("pr").isTextual()) out.put("pr", s.path("pr").asText());
+        out.put("title", oneLine(s.path("name").asText(), 200));
+        return out;
+    }
+
+    /** push-preview: what a push would send, and where, for you to read before you push. */
+    static JsonNode pushPreview(Config config, JsonNode in) throws Exception {
+        return preview(config, load(in.path("session").asText("")), token(config));
+    }
+
+    /**
+     * push (on your click in the desk's bar): the commits you read go to the session's branch, by the runner, from the
+     * session's clone, with your gh account's token lent for that push only. The first push makes the branch; later
+     * ones replace it (the runner keeps a session's work as one commit), refused if it changed on GitHub since.
+     */
+    static JsonNode push(Config config, JsonNode in) throws Exception {
+        if (!runnerAtLeast(0, 52)) throw new IllegalStateException("Pushing a session needs runner 0.52.0 or later: update the desk");
+        ObjectNode s = load(in.path("session").asText(""));
+        String token = token(config);
+        ObjectNode p = preview(config, s, token);
+        if (!in.path("as").asText("").equalsIgnoreCase(config.githubLogin)) throw new IllegalArgumentException("Not the account in Sessions' settings");
+        if (!in.path("to").asText("").equals(p.path("to").asText()) || !in.path("target").asText("").equals(p.path("target").asText())) {
+            throw new IllegalStateException("The work changed since you looked: look at it again");
+        }
+        if (p.path("already").asBoolean()) throw new IllegalStateException("That's pushed already");
+        ObjectNode push = JSON.createObjectNode().put("repo", s.path("repo").asText()).put("number", 0)
+                .put("slot", s.path("id").asText()).put("headRepo", p.path("headRepo").asText())
+                .put("headRef", p.path("headRef").asText()).put("to", p.path("to").asText());
+        String pushed = s.path("pushed").asText("");
+        if (pushed.isEmpty()) push.put("from", p.path("from").asText());
+        else push.put("from", pushed).put("squash", true).put("base", p.path("base").asText());
+        push.put("token", token);
+        return JSON.createObjectNode().put("session", s.path("id").asText()).set("push", push);
+    }
+
+    /**
+     * push-done: how the runner's push went. Pushed, it's kept on the session (the branch, and the commit, which the
+     * next push replaces), and the first time a draft PR opens for it, with your gh account.
+     */
+    static JsonNode pushDone(Config config, JsonNode in) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        String to = in.path("to").asText("");
+        if (in.path("status").asInt() != 200) throw new IllegalStateException(in.path("error").asText("It wasn't pushed"));
+        if (!SHA.matcher(to).matches()) throw new IllegalArgumentException("Not a commit");
+        String token = token(config);
+        String headRepo = headRepo(config, s, token), headRef = branch(s);
+        String there = run(List.of("gh", "api", "repos/" + headRepo + "/branches/" + headRef, "--jq", ".commit.sha"), token);
+        if (!to.equals(there == null ? "" : there.strip())) throw new IllegalStateException("GitHub doesn't show that commit on " + headRepo + ":" + headRef);
+        s.put("pushed", to).put("branch", headRef).put("headRepo", headRepo).put("pushedAt", Instant.now().toString());
+        String repo = s.path("repo").asText(), head = headRepo.equals(repo) ? headRef : headRepo.substring(0, headRepo.indexOf('/')) + ":" + headRef;
+        String note = null;
+        if (!s.path("pr").isTextual()) {
+            String open = run(List.of("gh", "api", "repos/" + repo + "/pulls?state=open&head=" + headRepo.substring(0, headRepo.indexOf('/')) + ":" + headRef,
+                    "--jq", ".[0].html_url // empty"), token);
+            String base = work(s).path("base").asText();
+            if (open == null || open.isBlank()) {
+                List<String> cmd = new ArrayList<>(List.of("gh", "api", "-X", "POST", "repos/" + repo + "/pulls", "-f", "title=" + oneLine(s.path("name").asText(), 200),
+                        "-f", "head=" + head, "-f", "base=" + base, "-f", "body=" + prBody(s), "--jq", ".html_url"));
+                open = run(append(cmd, "-F", "draft=true"), token);
+                if (open == null || open.isBlank()) {
+                    // A private repo on a free plan can't have draft PRs: an open one, said so.
+                    open = run(cmd, token);
+                    if (open != null && !open.isBlank()) note = "GitHub doesn't allow a draft PR there, so it opened as ready for review.";
+                }
+            }
+            if (open == null || open.isBlank()) note = "Pushed, but GitHub didn't open the PR: open it from " + headRepo + ":" + headRef + ".";
+            else s.put("pr", open.strip());
+        }
+        save(s);
+        ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("pushed", to)
+                .put("target", headRepo + ":" + headRef);
+        if (s.path("pr").isTextual()) out.put("pr", s.path("pr").asText());
+        if (note != null) out.put("note", note);
+        return out;
+    }
+
+    static List<String> append(List<String> cmd, String... more) {
+        List<String> out = new ArrayList<>(cmd);
+        out.addAll(List.of(more));
+        return out;
+    }
+
+    /** The PR's description: what the agent committed. Not the session's goal or chat, which may be private notes. */
+    static String prBody(ObjectNode s) throws IOException {
+        StringBuilder b = new StringBuilder();
+        for (JsonNode c : work(s).path("commits")) b.append("- ").append(oneLine(c.path("subject").asText(), 200)).append('\n');
+        return b.append("\nPushed from a Sessions chat on Elf Desk.").toString();
+    }
+
     /** unqueue: takes a message you queued off, before it's sent. */
     static JsonNode unqueue(JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
@@ -636,7 +806,8 @@ public class Sessions implements Callable<Integer> {
      * Asked of the agent with every message: the message you'd most likely send next, on a last line of its own. The
      * console shows it in the empty prompt, and Tab takes it, as in Claude Code; it's kept off the reply.
      */
-    static final String SUGGEST_RULE = "\n\n<desk-note>If there is an obvious next step for me, end your reply with one last line: "
+    static final String SUGGEST_RULE = "\n\n<desk-note>You can't push or open PRs from here: when work is ready, commit it in "
+            + "this clone, and I'll push it to a branch and open a draft PR from the chat. If there is an obvious next step for me, end your reply with one last line: "
             + "\"Next: \" and the message I would most likely send you next, in my own words, under 100 characters "
             + "(like \"Yes, go ahead\" or \"Run the tests\"). Leave the line out when there isn't one. My chat shows it as a "
             + "suggestion I can take, not as part of your answer.</desk-note>";

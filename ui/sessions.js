@@ -126,7 +126,8 @@ class SessionsTab extends LitElement {
         _busy: { state: true }, _goalOpen: { state: true }, _editing: { state: true }, _archived: { state: true },
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
-        _files: { state: true }, _fillOk: { state: true }, _dragging: { state: true },
+        _files: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
+        _pushDiff: { state: true }, _pushed: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -263,6 +264,14 @@ class SessionsTab extends LitElement {
         @keyframes t-spin { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: reduce) { .t-spin { animation: none; } }
         .t-files { display: flex; gap: 8px; flex-wrap: wrap; }
+        /* A push to read before it goes. */
+        .t-push { margin: 0 12px; padding: 8px 10px; border: 1px solid var(--t-line); border-radius: 8px; background: var(--t-bg2);
+            display: grid; gap: 4px; max-height: 45vh; overflow-y: auto; }
+        .t-push .t-ink { color: var(--t-ink); }
+        .t-push pre { margin: 0; white-space: pre; overflow-x: auto; font: inherit; font-size: 12.5px; color: var(--t-dim); }
+        .t-push pre.t-diff { color: var(--t-ink); max-height: 30vh; overflow-y: auto; }
+        .t-push .t-row { display: flex; gap: 14px; align-items: baseline; padding-top: 4px; }
+        .term button.t-acc { color: var(--t-acc); font-weight: 600; }
         /* Dragging files over the console: it says where they go. */
         .term { position: relative; }
         .t-dropzone { position: absolute; inset: 8px; z-index: 5; pointer-events: none; display: grid; place-items: center;
@@ -307,6 +316,9 @@ class SessionsTab extends LitElement {
     connectedCallback() {
         super.connectedCallback();
         this._load();
+        // Pushing a session's work comes with the GitHub elf: offered only when it's on the desk. (An older desk has no hasElf.)
+        (typeof elf.hasElf === 'function' ? elf.hasElf('github') : Promise.resolve(false))
+            .then(v => { this._github = !!v; }).catch(() => { this._github = false; });
         // A session changed, or an agent said something: read again.
         this._off = elf.onChange(() => this._load());
         this._offRoute = elf.onRoute(r => { this._route = r; this._routeChanged(); });
@@ -574,6 +586,9 @@ class SessionsTab extends LitElement {
                         <button class="t-btn" @click=${() => this._act('unlink', { session: s.id }, 'Couldn\'t unlink it')}>unlink</button></span>`
                         : html`<button class="t-btn" @click=${() => this._linkTodo(s)}>link a todo</button>`}
                     <span class="t-grow"></span>
+                    ${s.pr ? html`<a href=${s.pr} target="_blank" rel="noopener" title=${s.branch ? `Branch ${s.branch}` : ''}>PR</a>` : nothing}
+                    ${this._github ? html`<button class="t-btn" ?disabled=${busy || !!this._busy} title=${busy ? 'When this turn is done' : 'Read the commits, then push them to GitHub'}
+                        @click=${() => this._pushPreview(s)}>${this._busy === 'push-preview' ? 'reading…' : 'push'}</button>` : nothing}
                     ${this._editing ? nothing : html`<button class="t-btn" @click=${() => { this._editing = 'name'; }}>rename</button>`}
                     <button class="t-btn" @click=${() => this._act('archive', { session: s.id, archived: !s.archived }, 'Couldn\'t archive it')}>
                         ${s.archived ? 'unarchive' : 'archive'}</button>
@@ -588,8 +603,56 @@ class SessionsTab extends LitElement {
             <div class="t-log" aria-live="polite" @scroll=${e => { this._stick = e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight < 40; }}>
                 ${(s.turns ?? []).map((t, i) => this._turn(t, i))}
             </div>
+            ${this._pushBox(s, busy)}
             ${this._compose(s, busy)}
         </div>`;
+    }
+
+    // ---- pushing the session's work: read it, then the desk's bar asks, then the runner pushes and a draft PR opens ----
+
+    async _pushPreview(s) {
+        this._pushed = null;
+        this._pushDiff = false;
+        const p = await this._act('push-preview', { session: s.id }, 'Couldn\'t read its commits');
+        this._push = p && p.session === s.id ? p : null;
+    }
+
+    _pushBox(s, busy) {
+        const done = this._pushed?.session === s.id ? this._pushed : null;
+        if (done) {
+            return html`<div class="t-push"><div>✓ Pushed to <b>${done.target}</b>${done.pr ? html` · <a href=${done.pr} target="_blank" rel="noopener">${done.opened ? 'draft PR opened' : 'its PR'}</a>` : ''}
+                ${done.note ? html`<span class="t-warn"> ${done.note}</span>` : nothing}
+                <button class="t-btn" @click=${() => { this._pushed = null; }}>ok</button></div></div>`;
+        }
+        const p = this._push?.session === s.id ? this._push : null;
+        if (!p) return nothing;
+        const n = (p.commits ?? []).length;
+        return html`<div class="t-push">
+            <div><b>${p.already ? 'Already pushed' : p.update ? 'Update' : 'Push to'}</b> ${p.target}
+                ${p.update ? html`<span class="t-dim">(replaces what's there: the session's work is kept as one commit on ${p.base})</span>`
+                    : html`<span class="t-dim">a new branch from ${p.base}, then a draft PR on ${p.repo}</span>`}</div>
+            ${(p.commits ?? []).map(c => html`<div class="t-dim">${c.sha.slice(0, 7)} <span class="t-ink">${c.subject}</span></div>`)}
+            ${p.diffstat ? html`<pre class="t-stat">${p.diffstat}</pre>` : nothing}
+            ${this._pushDiff ? html`<pre class="t-diff">${p.patch}${p.patchCut ? '\n… (cut short: see it all on GitHub)' : ''}</pre>` : nothing}
+            <div class="t-row">
+                ${p.already ? nothing : html`<button class="t-btn t-acc" ?disabled=${busy || !!this._busy} @click=${() => this._doPush(s, p)}>
+                    ${this._busy === 'push' || this._busy === 'push-done' ? 'pushing…' : `push ${n} commit${n === 1 ? '' : 's'} as ${p.as}`}</button>`}
+                ${p.patch ? html`<button class="t-btn" @click=${() => { this._pushDiff = !this._pushDiff; }}>${this._pushDiff ? 'hide the diff' : 'show the diff'}</button>` : nothing}
+                ${p.pr ? html`<a href=${p.pr} target="_blank" rel="noopener">its PR</a>` : nothing}
+                <button class="t-btn" @click=${() => { this._push = null; }}>${p.already ? 'close' : 'cancel'}</button>
+            </div>
+        </div>`;
+    }
+
+    async _doPush(s, p) {
+        const n = (p.commits ?? []).length;
+        const r = await this._act('push', { session: s.id, to: p.to, as: p.as, target: p.target, commits: `${n} commit${n === 1 ? '' : 's'}` }, 'Couldn\'t push it');
+        if (!r?.push) return; // you said no in the desk's bar, or it was refused (it says why)
+        const done = await this._act('push-done', { session: s.id, to: p.to, status: r.push.status ?? 0,
+            ...(r.push.error ? { error: String(r.push.error).slice(0, 4000) } : {}) }, 'Couldn\'t push it');
+        if (!done) return;
+        this._push = null;
+        this._pushed = { ...done, opened: !p.pr && !!done.pr };
     }
 
     /** The sessions as a strip of tabs, a tag to show, New and Settings: one line, scrolling sideways when they're many. */

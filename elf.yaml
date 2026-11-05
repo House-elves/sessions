@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.9.0
+version: 0.10.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -20,7 +20,10 @@ reads:
   - Which coding agents are installed on this machine, to offer them for a new session.
   - When you start a session from a todo, that todo in the Todo list's saved list (its description, checklist and issues, which it only reads), as the session's goal for you to read and change before you start.
 writes:
-  - Your sessions, on this machine. The agent's commits stay in its clone on this machine; nothing is pushed.
+  - Your sessions, on this machine. The agent's commits stay in its clone on this machine until you push them.
+  - When you push a session (you read its commits and diff first, and confirm in the desk's bar), its commits go to a
+    branch on GitHub (session/<its name>, on the repo, or on your fork when you can't push there), with your gh
+    account, and the first push opens a draft PR on the repo. The agent itself never has GitHub credentials.
 
 settings:
   - key: GITHUB_LOGIN
@@ -57,8 +60,8 @@ data: [sessions, agents, attachments]
 agents:
   done: agent-done
 
-# Everything here changes only your sessions on this machine, or starts the sandboxed agent on your own words: no
-# asking first. Deleting a session asks.
+# Almost everything here changes only your sessions on this machine, or starts the sandboxed agent on your own words:
+# no asking first. Pushing to GitHub and deleting a session ask.
 actions:
   create:
     label: Start a session
@@ -121,6 +124,33 @@ actions:
     params:
       session: {pattern: "s[0-9]{10,16}"}
       n: {pattern: "[0-9]", max: 1}
+  # ---- pushing a session's work: the preview reads it, the push waits for your click in the desk's bar ----
+  push-preview:
+    label: Show what a push would send
+    args: [--action=push-preview]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+  push:
+    label: Push a session's commits to GitHub
+    args: [--action=push]
+    confirm: "Push {commits} to {target} on GitHub, as {as}? The first push also opens a draft PR."
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      to: {pattern: "[0-9a-f]{40}", max: 40}
+      # For the confirm bar's words; the elf refuses them unless they're what it would push, as whom.
+      as: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}", max: 39}
+      target: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}:[A-Za-z0-9][A-Za-z0-9._/-]{0,100}", max: 250}
+      commits: {pattern: "[0-9]{1,3} commits?", max: 12}
+  push-done:
+    label: Keep a push, and open its draft PR
+    args: [--action=push-done]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      to: {pattern: "[0-9a-f]{40}", max: 40}
+      status: {kind: int}
+      error: {pattern: "[\\s\\S]*", max: 4000, optional: true}
   rename:
     label: Rename a session
     args: [--action=rename]

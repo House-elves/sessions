@@ -1,5 +1,13 @@
 # What's new
 
+## 0.10.0
+
+- New: push a session's work to GitHub, when the GitHub elf is on your desk. "push" (top right of a session) shows
+  the commits, what they change and the diff, and where they go: a branch, session/<its name>, on the repo (or on
+  your fork when you can't push there). Push, confirm in the desk's bar, and the runner pushes it from the session's
+  clone with your gh account; the first push opens a draft PR, and "PR" then links to it. Push again after more
+  turns to update it. The agent itself never has GitHub credentials, and it's told to commit its work for you to
+  push. Needs runner 0.52.0.
 ## 0.9.0
 
 - New: type and press Enter while the agent works, as in Claude Code: your message is queued (it shows above the
