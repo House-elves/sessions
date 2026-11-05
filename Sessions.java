@@ -130,7 +130,11 @@ public class Sessions implements Callable<Integer> {
                 case "agent-done" -> agentDone(in);
                 case "unqueue" -> unqueue(in);
                 case "push-preview" -> pushPreview(config, in);
-                case "push" -> push(config, in);
+                case "push" -> push(config, in, false);
+                case "push-pr" -> push(config, in, true);
+                case "vars" -> vars();
+                case "var-set" -> varSet(in);
+                case "var-remove" -> varRemove(in);
                 case "push-done" -> pushDone(config, in);
                 case "attach" -> attach(in);
                 case "rename" -> rename(in);
@@ -619,16 +623,58 @@ public class Sessions implements Callable<Integer> {
                 + ": fork it on GitHub first");
     }
 
-    static ObjectNode preview(Config config, ObjectNode s, String token) throws Exception {
+    /**
+     * What a push would send, and where. With pr (a number, before the session's first push): onto that open PR's
+     * branch instead of a new one, replacing what's on it with the session's work, if the PR goes into the branch the
+     * session works on.
+     */
+    static ObjectNode preview(Config config, ObjectNode s, String token, int pr) throws Exception {
         harvest(s);
         if (running(s)) throw new IllegalStateException("It's still working: push when this turn is done");
         JsonNode git = work(s);
         String pushed = s.path("pushed").asText("");
+        if (pr > 0 && (!pushed.isEmpty() || s.path("pr").isTextual())) {
+            throw new IllegalStateException("This session pushes to its own PR already");
+        }
         ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("repo", s.path("repo").asText())
-                .put("base", git.path("base").asText()).put("headRepo", headRepo(config, s, token)).put("headRef", branch(s))
+                .put("base", git.path("base").asText())
                 .put("from", git.path("from").asText()).put("to", git.path("to").asText()).put("as", config.githubLogin)
                 .put("update", !pushed.isEmpty()).put("already", pushed.equals(git.path("to").asText()));
+        if (pr > 0) {
+            String repo = s.path("repo").asText();
+            String json = run(List.of("gh", "api", "repos/" + repo + "/pulls/" + pr, "--jq", "{state, merged, base: .base.ref, "
+                    + "headRepo: .head.repo.full_name, headRef: .head.ref, sha: .head.sha, url: .html_url, commits, title}"), token);
+            if (json == null || json.isBlank()) throw new IllegalArgumentException(repo + " has no PR #" + pr + " that " + config.githubLogin + " can see");
+            JsonNode p = JSON.readTree(json);
+            if (!p.path("state").asText().equals("open")) throw new IllegalStateException("PR #" + pr + " isn't open");
+            if (!p.path("base").asText().equals(git.path("base").asText())) {
+                throw new IllegalStateException("PR #" + pr + " goes into " + p.path("base").asText() + ", and the session works on "
+                        + git.path("base").asText());
+            }
+            if (!REPO.matcher(p.path("headRepo").asText("")).matches() || !BRANCH.matcher(p.path("headRef").asText("")).matches()
+                    || p.path("headRef").asText().contains("..") || !SHA.matcher(p.path("sha").asText("")).matches()) {
+                throw new IllegalStateException("PR #" + pr + "'s branch can't take a push (its fork is gone?)");
+            }
+            out.put("headRepo", p.path("headRepo").asText()).put("headRef", p.path("headRef").asText())
+                    .put("prNumber", pr).put("prTitle", oneLine(p.path("title").asText(), 200)).put("pr", p.path("url").asText())
+                    .put("replaces", p.path("sha").asText()).put("replacesCommits", p.path("commits").asInt());
+        } else {
+            out.put("headRepo", headRepo(config, s, token)).put("headRef", branch(s));
+        }
         out.put("target", out.path("headRepo").asText() + ":" + out.path("headRef").asText());
+        // Before the first push: your open PRs on the repo, any of which it could go onto instead.
+        if (pushed.isEmpty() && !s.path("pr").isTextual()) {
+            String mine = run(List.of("gh", "api", "repos/" + s.path("repo").asText() + "/pulls?state=open&per_page=100", "--jq",
+                    "[.[] | select(.user.login | ascii_downcase == \"" + config.githubLogin.toLowerCase(java.util.Locale.ROOT)
+                            + "\") | {number, title, base: .base.ref}]"), token);
+            ArrayNode prs = out.putArray("prs");
+            if (mine != null && !mine.isBlank()) {
+                for (JsonNode p : JSON.readTree(mine)) {
+                    prs.addObject().put("number", p.path("number").asInt()).put("title", oneLine(p.path("title").asText(), 200))
+                            .put("base", p.path("base").asText());
+                }
+            }
+        }
         out.set("commits", git.path("commits"));
         out.put("diffstat", git.path("diffstat").asText(""));
         out.put("patch", clip(git.path("patch").asText(""), 150_000));
@@ -640,19 +686,23 @@ public class Sessions implements Callable<Integer> {
 
     /** push-preview: what a push would send, and where, for you to read before you push. */
     static JsonNode pushPreview(Config config, JsonNode in) throws Exception {
-        return preview(config, load(in.path("session").asText("")), token(config));
+        return preview(config, load(in.path("session").asText("")), token(config), in.path("pr").asInt(0));
     }
 
     /**
      * push (on your click in the desk's bar): the commits you read go to the session's branch, by the runner, from the
      * session's clone, with your gh account's token lent for that push only. The first push makes the branch; later
      * ones replace it (the runner keeps a session's work as one commit), refused if it changed on GitHub since.
+     * push-pr (its own words in the bar): the first push goes onto an open PR's branch instead, replacing what's there
+     * if it's still what the preview showed.
      */
-    static JsonNode push(Config config, JsonNode in) throws Exception {
+    static JsonNode push(Config config, JsonNode in, boolean ontoPr) throws Exception {
         if (!runnerAtLeast(0, 52)) throw new IllegalStateException("Pushing a session needs runner 0.52.0 or later: update the desk");
         ObjectNode s = load(in.path("session").asText(""));
         String token = token(config);
-        ObjectNode p = preview(config, s, token);
+        int pr = ontoPr ? in.path("pr").asInt(0) : 0;
+        if (ontoPr && pr <= 0) throw new IllegalArgumentException("Which PR?");
+        ObjectNode p = preview(config, s, token, pr);
         if (!in.path("as").asText("").equalsIgnoreCase(config.githubLogin)) throw new IllegalArgumentException("Not the account in Sessions' settings");
         if (!in.path("to").asText("").equals(p.path("to").asText()) || !in.path("target").asText("").equals(p.path("target").asText())) {
             throw new IllegalStateException("The work changed since you looked: look at it again");
@@ -666,11 +716,15 @@ public class Sessions implements Callable<Integer> {
                 .put("slot", s.path("id").asText()).put("headRepo", p.path("headRepo").asText())
                 .put("headRef", p.path("headRef").asText()).put("to", p.path("to").asText());
         String pushed = s.path("pushed").asText("");
-        if (pushed.isEmpty()) push.put("from", p.path("from").asText());
+        // Onto a PR: replaces its branch, only if it's still at the commit the preview showed (the runner's lease).
+        if (pr > 0) push.put("from", p.path("replaces").asText()).put("squash", true).put("base", p.path("base").asText());
+        else if (pushed.isEmpty()) push.put("from", p.path("from").asText());
         else push.put("from", pushed).put("squash", true).put("base", p.path("base").asText());
         // What push-done may finish: only this push, handed to the runner now, and only for a while.
-        s.putObject("pendingPush").put("to", p.path("to").asText()).put("target", p.path("target").asText())
+        ObjectNode pending = s.putObject("pendingPush").put("to", p.path("to").asText()).put("target", p.path("target").asText())
+                .put("headRepo", p.path("headRepo").asText()).put("headRef", p.path("headRef").asText())
                 .put("at", Instant.now().toString());
+        if (pr > 0) pending.put("pr", p.path("pr").asText());
         save(s);
         push.put("token", token);
         return JSON.createObjectNode().put("session", s.path("id").asText()).set("push", push);
@@ -696,11 +750,13 @@ public class Sessions implements Callable<Integer> {
             throw new IllegalStateException(in.path("error").asText("It wasn't pushed"));
         }
         String token = token(config);
-        String headRepo = headRepo(config, s, token), headRef = branch(s);
-        if (!pending.path("target").asText().equals(headRepo + ":" + headRef)) throw new IllegalStateException("No push there is waiting: push it again");
+        String headRepo = pending.path("headRepo").asText(""), headRef = pending.path("headRef").asText("");
+        if (!REPO.matcher(headRepo).matches() || !BRANCH.matcher(headRef).matches()
+                || !pending.path("target").asText().equals(headRepo + ":" + headRef)) throw new IllegalStateException("No push there is waiting: push it again");
         String there = run(List.of("gh", "api", "repos/" + headRepo + "/branches/" + headRef, "--jq", ".commit.sha"), token);
         if (!to.equals(there == null ? "" : there.strip())) throw new IllegalStateException("GitHub doesn't show that commit on " + headRepo + ":" + headRef);
         s.put("pushed", to).put("branch", headRef).put("headRepo", headRepo).put("pushedAt", Instant.now().toString());
+        if (pending.path("pr").asText("").startsWith("https://github.com/")) s.put("pr", pending.path("pr").asText());
         String repo = s.path("repo").asText(), head = headRepo.equals(repo) ? headRef : headRepo.substring(0, headRepo.indexOf('/')) + ":" + headRef;
         String note = null;
         if (!s.path("pr").isTextual()) {
@@ -741,6 +797,75 @@ public class Sessions implements Callable<Integer> {
         return b.append("\nPushed from a Sessions chat on Elf Desk.").toString();
     }
 
+    // ---- variables every session's agent has, for the commands it runs (an API key for what it builds, say) ----
+
+    /** Kept next to the settings, never in a folder the tab reads: the tab only ever gets their names. */
+    static final Path VARS = Config.DIR.resolve("vars.json");
+    static final Pattern VAR_NAME = Pattern.compile("[A-Z_][A-Z0-9_]{0,63}");
+    /** The runner's own, and those that change how a shell, git or the agent runs (as the runner refuses them). */
+    static final Pattern VAR_TAKEN = Pattern.compile("(HOME|USER|LOGNAME|SHELL|PATH|PWD|OLDPWD|TMPDIR|TERM|LANG|IFS|ENV|BASH_ENV|"
+            + "PROMPT_COMMAND|SHELLOPTS|BASHOPTS|PS4|JAVA_HOME|XDG_.*|LD_.*|DYLD_.*|GIT_.*|GH_.*|CLAUDE_.*|BOB_.*|ELF_.*|SESSION_ENV_FILE|"
+            + "DOCKER_HOST|CONTAINER_HOST|CONTAINERS_CONF|TESTCONTAINERS_.*|DISABLE_AUTOUPDATER)");
+    static final int MAX_VARS = 30;
+
+    static ObjectNode readVars() throws IOException {
+        if (!Files.isRegularFile(VARS)) return JSON.createObjectNode();
+        JsonNode n = JSON.readTree(VARS.toFile());
+        return n instanceof ObjectNode o ? o : JSON.createObjectNode();
+    }
+
+    static void writeVars(ObjectNode vars) throws IOException {
+        Files.createDirectories(Config.DIR);
+        Path tmp = Config.DIR.resolve("vars.json.tmp");
+        Files.deleteIfExists(tmp);
+        Files.createFile(tmp, java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+                java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")));
+        Files.writeString(tmp, JSON.writeValueAsString(vars));
+        Files.move(tmp, VARS, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+    }
+
+    /** vars: their names, never their values. */
+    static JsonNode vars() throws IOException {
+        ObjectNode out = JSON.createObjectNode();
+        ArrayNode names = out.putArray("vars");
+        readVars().fieldNames().forEachRemaining(names::add);
+        return out;
+    }
+
+    /** var-set: adds a variable, or changes its value. */
+    static JsonNode varSet(JsonNode in) throws IOException {
+        String name = in.path("name").asText("").strip(), value = in.path("value").asText("");
+        if (!VAR_NAME.matcher(name).matches()) throw new IllegalArgumentException("A name is capitals, digits and _, like ANTHROPIC_API_KEY");
+        if (VAR_TAKEN.matcher(name).matches()) throw new IllegalArgumentException(name + " is the sandbox's own: pick another name");
+        if (value.isEmpty() || value.length() > 8192 || value.chars().anyMatch(c -> c == 0 || c == '\n' || c == '\r')) {
+            throw new IllegalArgumentException("A value is text on one line, up to 8192 characters");
+        }
+        ObjectNode vars = readVars();
+        if (!vars.has(name) && vars.size() >= MAX_VARS) throw new IllegalStateException("That's " + MAX_VARS + " already: remove one first");
+        vars.put(name, value);
+        writeVars(vars);
+        return vars();
+    }
+
+    /** var-remove: takes one off. */
+    static JsonNode varRemove(JsonNode in) throws IOException {
+        ObjectNode vars = readVars();
+        vars.remove(in.path("name").asText(""));
+        writeVars(vars);
+        return vars();
+    }
+
+    /** What every turn is told about them: their names, and how to have them (Claude Code's shell has them already). */
+    static String varsNote(ObjectNode vars, boolean bob) {
+        if (vars.isEmpty()) return "";
+        List<String> names = new ArrayList<>();
+        vars.fieldNames().forEachRemaining(names::add);
+        return "\n<desk-note>These variables are set for the commands you run: " + String.join(", ", names) + ". "
+                + (bob ? "Run `set -a; . \"$SESSION_ENV_FILE\"; set +a` first in a command that needs them. "
+                       : "Your shell commands have them already. ")
+                + "Use them by name; never print, log or commit their values.</desk-note>";
+    }
+
     /** unqueue: takes a message you queued off, before it's sent. */
     static JsonNode unqueue(JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
@@ -762,6 +887,10 @@ public class Sessions implements Callable<Integer> {
         // An older runner doesn't know agent, and would quietly run Claude Code instead: refused before anything is saved.
         boolean bob = s.path("agent").asText("claude").equals("bob");
         if (bob && !runnerAtLeast(0, 47)) throw new IllegalStateException("IBM Bob sessions need runner 0.47.0 or later: update the desk");
+        ObjectNode vars = readVars();
+        if (!vars.isEmpty() && !runnerAtLeast(0, 53)) {
+            throw new IllegalStateException("Session variables need runner 0.53.0 or later: update the desk, or remove them in Sessions' settings");
+        }
         harvest(s);
         ArrayNode turns = (ArrayNode) s.path("turns");
         for (JsonNode t : turns) {
@@ -799,7 +928,8 @@ public class Sessions implements Callable<Integer> {
         ObjectNode agent = JSON.createObjectNode().put("id", agentId);
         agent.putObject("checkout").put("repo", s.path("repo").asText()).put("number", 0).put("kind", "REPO")
                 .put("slot", s.path("id").asText());
-        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + SUGGEST_RULE);
+        if (!vars.isEmpty()) agent.set("env", vars);
+        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + SUGGEST_RULE + varsNote(vars, bob));
         if (!images.isEmpty()) agent.set("images", images);
         // The session keeps the agent it started with: neither can resume the other's.
         if (bob) agent.put("agent", "bob");

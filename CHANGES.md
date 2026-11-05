@@ -1,5 +1,13 @@
 # What's new
 
+## 0.11.0
+
+- New: session variables. Add names and values in Sessions' settings (like ANTHROPIC_API_KEY for an app a session
+  builds): every session's agent is told their names, and the commands it runs have them, but the agent itself
+  doesn't run with them. They stay on this machine, and once added, only their names show. Needs runner 0.53.0.
+- New: push onto an open PR. Before a session's first push, "onto" picks one of your open PRs on the repo (or any
+  PR by its number) instead of a new branch: the push replaces what's on that PR's branch with the session's work,
+  if nobody pushed there since you looked, and "PR" then links to it.
 ## 0.10.0
 
 - New: push a session's work to GitHub, when the GitHub elf is on your desk. "push" (top right of a session) shows

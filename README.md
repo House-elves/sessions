@@ -17,7 +17,10 @@ your desk.
   When the agent suggests what you'd likely say next, it shows in the empty prompt: Tab takes it.
   While it works, Enter queues your message: it goes when the turn ends (runner 0.51.0).
 - **Push and a draft PR:** with the GitHub elf on your desk, "push" shows the session's commits and diff, and on
-  your confirm pushes them to a branch (session/<name>, on the repo or your fork) and opens a draft PR (runner 0.52.0).
+  your confirm pushes them to a branch (session/<name>, on the repo or your fork) and opens a draft PR (runner 0.52.0),
+  or onto one of the repo's open PRs instead, replacing what's on its branch.
+- **Session variables:** names and values in Sessions' settings (an API key for what a session builds) that the
+  commands every session's agent runs have, while the agent itself doesn't; the desk only shows their names (runner 0.53.0).
   Paste a screenshot, drag files onto the session (or the New session form), or attach them: images and PDFs go to Claude Code with your message (up to 4
   together, a PDF up to 3 MB; not to IBM Bob), and text files (up to 100 KB each) and Word files (.docx, up to 3 MB,
   read as text with tables as rows) go into the message. An old .doc file isn't read: save it as .docx or PDF.

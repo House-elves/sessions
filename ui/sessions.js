@@ -127,7 +127,7 @@ class SessionsTab extends LitElement {
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
         _files: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
-        _pushDiff: { state: true }, _pushed: { state: true },
+        _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -272,6 +272,11 @@ class SessionsTab extends LitElement {
         .t-push pre.t-diff { color: var(--t-ink); max-height: 30vh; overflow-y: auto; }
         .t-push .t-row { display: flex; gap: 14px; align-items: baseline; padding-top: 4px; }
         .term button.t-acc { color: var(--t-acc); font-weight: 600; }
+        .t-push .t-sel { font: inherit; font-size: 13px; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
+            border-radius: 6px; padding: 2px 6px; max-width: min(36rem, 100%); }
+        .t-push .t-inline { display: inline-flex; gap: 6px; align-items: baseline; }
+        .t-push .t-num { font: inherit; width: 6em; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
+            border-radius: 6px; padding: 2px 6px; }
         /* Dragging files over the console: it says where they go. */
         .term { position: relative; }
         .t-dropzone { position: absolute; inset: 8px; z-index: 5; pointer-events: none; display: grid; place-items: center;
@@ -610,11 +615,41 @@ class SessionsTab extends LitElement {
 
     // ---- pushing the session's work: read it, then the desk's bar asks, then the runner pushes and a draft PR opens ----
 
-    async _pushPreview(s) {
+    async _pushPreview(s, pr) {
         this._pushed = null;
         this._pushDiff = false;
-        const p = await this._act('push-preview', { session: s.id }, 'Couldn\'t read its commits');
-        this._push = p && p.session === s.id ? p : null;
+        const prs = this._push?.session === s.id ? this._push.prs : null;
+        const p = await this._act('push-preview', { session: s.id, ...(pr ? { pr } : {}) }, 'Couldn\'t read its commits');
+        if (p && p.session === s.id) this._push = { ...p, prs: p.prs ?? prs };
+        else if (!pr) this._push = null;
+    }
+
+    /** Before the first push: a branch of its own and a new draft PR, or one of your open PRs (or any by its number). */
+    _pushWhere(s, p, busy) {
+        if (p.update || p.already || (p.pr && !p.prNumber)) return nothing;
+        const pick = e => {
+            const v = e.target.value;
+            if (v === 'other') {
+                e.target.value = p.prNumber ?? '';
+                this._otherPr = true;
+                return;
+            }
+            this._otherPr = false;
+            this._pushPreview(s, v ? Number(v) : 0);
+        };
+        const mine = p.prs ?? [];
+        return html`<div class="t-row"><span class="t-dim">onto</span>
+            <select class="t-sel" aria-label="Where it goes" ?disabled=${busy || !!this._busy} @change=${pick}>
+                <option value="" ?selected=${!p.prNumber}>a new branch and draft PR</option>
+                ${mine.map(x => html`<option value=${x.number} ?selected=${p.prNumber === x.number}>PR #${x.number}: ${x.title}</option>`)}
+                ${p.prNumber && !mine.some(x => x.number === p.prNumber) ? html`<option value=${p.prNumber} selected>PR #${p.prNumber}: ${p.prTitle}</option>` : nothing}
+                <option value="other">another PR, by its number…</option>
+            </select>
+            ${this._otherPr ? html`<form class="t-inline" @submit=${e => { e.preventDefault();
+                    const n = Number(new FormData(e.target).get('n')); if (n > 0) { this._otherPr = false; this._pushPreview(s, n); } }}>
+                <span class="t-dim">#</span><input name="n" class="t-num" inputmode="numeric" pattern="[0-9]{1,7}" aria-label="PR number" autofocus>
+                <button class="t-btn">look</button></form>` : nothing}
+        </div>`;
     }
 
     _pushBox(s, busy) {
@@ -628,8 +663,10 @@ class SessionsTab extends LitElement {
         if (!p) return nothing;
         const n = (p.commits ?? []).length;
         return html`<div class="t-push">
+            ${this._pushWhere(s, p, busy)}
             <div><b>${p.already ? 'Already pushed' : p.update ? 'Update' : 'Push to'}</b> ${p.target}
                 ${p.update ? html`<span class="t-dim">(replaces what's there: the session's work is kept as one commit on ${p.base})</span>`
+                    : p.prNumber ? html`<span class="t-warn">replaces the ${count(p.replacesCommits, 'commit')} on PR #${p.prNumber} with the session's work, as one commit on ${p.base}</span>`
                     : html`<span class="t-dim">a new branch from ${p.base}, then a draft PR on ${p.repo}</span>`}</div>
             ${(p.commits ?? []).map(c => html`<div class="t-dim">${c.sha.slice(0, 7)} <span class="t-ink">${c.subject}</span></div>`)}
             ${p.diffstat ? html`<pre class="t-stat">${p.diffstat.replace(/^(?=\S)/, ' ')}</pre>` : nothing}
@@ -638,21 +675,23 @@ class SessionsTab extends LitElement {
                 ${p.already ? nothing : html`<button class="t-btn t-acc" ?disabled=${busy || !!this._busy} @click=${() => this._doPush(s, p)}>
                     ${this._busy === 'push' || this._busy === 'push-done' ? 'pushing…' : `push ${n} commit${n === 1 ? '' : 's'} as ${p.as}`}</button>`}
                 ${p.patch ? html`<button class="t-btn" @click=${() => { this._pushDiff = !this._pushDiff; }}>${this._pushDiff ? 'hide the diff' : 'show the diff'}</button>` : nothing}
-                ${p.pr ? html`<a href=${p.pr} target="_blank" rel="noopener">its PR</a>` : nothing}
-                <button class="t-btn" @click=${() => { this._push = null; }}>${p.already ? 'close' : 'cancel'}</button>
+                ${p.pr ? html`<a href=${p.pr} target="_blank" rel="noopener">${p.prNumber ? `PR #${p.prNumber}` : 'its PR'}</a>` : nothing}
+                <button class="t-btn" @click=${() => { this._push = null; this._otherPr = false; }}>${p.already ? 'close' : 'cancel'}</button>
             </div>
         </div>`;
     }
 
     async _doPush(s, p) {
         const n = (p.commits ?? []).length;
-        const r = await this._act('push', { session: s.id, to: p.to, as: p.as, target: p.target, commits: `${n} commit${n === 1 ? '' : 's'}` }, 'Couldn\'t push it');
+        const r = await this._act(p.prNumber ? 'push-pr' : 'push', { session: s.id, to: p.to, as: p.as, target: p.target,
+            commits: `${n} commit${n === 1 ? '' : 's'}`, ...(p.prNumber ? { pr: p.prNumber } : {}) }, 'Couldn\'t push it');
         if (!r?.push) return; // you said no in the desk's bar, or it was refused (it says why)
         const done = await this._act('push-done', { session: s.id, to: p.to, status: r.push.status ?? 0,
             ...(r.push.error ? { error: String(r.push.error).slice(0, 4000) } : {}) }, 'Couldn\'t push it');
         if (!done) return;
         this._push = null;
         this._pushed = { ...done, opened: !p.pr && !!done.pr };
+        this._otherPr = false;
     }
 
     /** The sessions as a strip of tabs, a tag to show, New and Settings: one line, scrolling sideways when they're many. */
@@ -1077,4 +1116,92 @@ class SessionsCard extends LitElement {
 
 customElements.define('sessions-tab', SessionsTab);
 customElements.define('sessions-card', SessionsCard);
-document.body.append(document.createElement(elf.view === 'card' ? 'sessions-card' : 'sessions-tab'));
+
+/**
+ * The top of its Settings pop-up: variables every session's agent has for the commands it runs (an API key for what
+ * it builds, say). Values go in once and are never shown again: the elf only ever answers with their names.
+ */
+class SessionsVars extends LitElement {
+    static properties = { _names: { state: true }, _busy: { state: true }, _error: { state: true }, _said: { state: true } };
+
+    static styles = [shared, css`
+        :host { display: block; margin-bottom: 28px; }
+        section { display: grid; gap: 10px; }
+        h2 { font-size: 18px; font-weight: 600; margin: 0; }
+        .hint { font-size: 13px; color: var(--muted); margin: 0; max-width: 44rem; }
+        ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+        li { display: flex; gap: 12px; align-items: center; }
+        li code { font-family: var(--font-code); font-weight: 500; overflow-wrap: anywhere; }
+        li .set { font-size: 13px; color: var(--muted); }
+        li .spacer { flex: 1; }
+        form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px; align-items: end; }
+        label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+        input { width: 100%; box-sizing: border-box; }
+        input[name="name"] { font-family: var(--font-code); text-transform: uppercase; }
+        .note { font-size: 13px; color: var(--muted); margin: 0; }
+        .error { margin: 0; }
+        @media (max-width: 560px) { form { grid-template-columns: 1fr; } }
+    `];
+
+    async connectedCallback() {
+        super.connectedCallback();
+        await this._act('vars');
+    }
+
+    async _act(action, params = {}) {
+        this._error = null;
+        this._busy = action;
+        try {
+            const r = await elf.act(action, params);
+            if (Array.isArray(r?.vars)) this._names = r.vars;
+            return r;
+        } catch (e) {
+            if (e.message !== 'cancelled') this._error = e.message;
+            this._names ??= [];
+            return null;
+        } finally {
+            this._busy = null;
+        }
+    }
+
+    async _add(e) {
+        e.preventDefault();
+        const form = e.target;
+        const name = form.elements.namedItem('name').value.trim().toUpperCase(), value = form.elements.namedItem('value').value;
+        if (!name || !value) return;
+        const had = this._names?.includes(name);
+        this._said = null;
+        if (await this._act('var-set', { name, value })) {
+            form.reset();
+            this._said = had ? `Changed ${name}.` : `Added ${name}. Sessions get it from their next message.`;
+        }
+    }
+
+    render() {
+        const names = this._names;
+        return html`<section aria-labelledby="vars-h">
+            <h2 id="vars-h">Session variables</h2>
+            <p class="hint">Every session's agent is told their names, and the commands it runs have them, like
+                <code>ANTHROPIC_API_KEY</code> for an app it builds and tests. Claude Code itself doesn't run with them. They stay on this
+                machine, and once added, only their names show here.</p>
+            ${names === undefined ? html`<p class="note">${spinner} Reading them…</p>`
+                : names.length ? html`<ul>${names.map(n => html`<li><code>${n}</code><span class="set">set</span><span class="spacer"></span>
+                    <button ?disabled=${!!this._busy} @click=${async () => { this._said = null; if (await this._act('var-remove', { name: n })) this._said = `Removed ${n}.`; }}
+                        aria-label="Remove ${n}">Remove</button></li>`)}</ul>`
+                : html`<p class="note">None yet.</p>`}
+            <form @submit=${this._add} autocomplete="off">
+                <label>Name<input name="name" required pattern="[A-Za-z_][A-Za-z0-9_]{0,63}" maxlength="64" placeholder="ANTHROPIC_API_KEY"
+                    spellcheck="false"></label>
+                <label>Value<input name="value" type="password" required maxlength="8192" autocomplete="new-password"></label>
+                <button class="primary" ?disabled=${!!this._busy}>${this._busy === 'var-set' ? 'Saving…' : 'Add'}</button>
+            </form>
+            <p class="note">Adding a name that's there already changes its value.</p>
+            ${this._said ? html`<p class="note" role="status">${this._said}</p>` : ''}
+            ${this._error ? html`<p class="error" role="alert">${this._error}</p>` : ''}
+        </section>`;
+    }
+}
+
+customElements.define('sessions-vars', SessionsVars);
+document.body.append(document.createElement(elf.view === 'settings' ? 'sessions-vars'
+    : elf.view === 'card' ? 'sessions-card' : 'sessions-tab'));
