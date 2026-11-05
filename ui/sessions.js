@@ -1190,7 +1190,7 @@ class SessionsVars extends LitElement {
                         aria-label="Remove ${n}">Remove</button></li>`)}</ul>`
                 : html`<p class="note">None yet.</p>`}
             <form @submit=${this._add} autocomplete="off">
-                <label>Name<input name="name" required pattern="[A-Za-z_][A-Za-z0-9_]{0,63}" maxlength="64" placeholder="ANTHROPIC_API_KEY"
+                <label>Name<input name="name" type="text" required pattern="[A-Za-z_][A-Za-z0-9_]{0,63}" maxlength="64" placeholder="ANTHROPIC_API_KEY"
                     spellcheck="false"></label>
                 <label>Value<input name="value" type="password" required maxlength="8192" autocomplete="new-password"></label>
                 <button class="primary" ?disabled=${!!this._busy}>${this._busy === 'var-set' ? 'Saving…' : 'Add'}</button>
