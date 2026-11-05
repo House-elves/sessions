@@ -1,5 +1,11 @@
 # What's new
 
+## 0.11.1
+
+- "push" (or "please push", "push it") typed in the chat opens the push box, since the agent can't push. The agent
+  is also told to point you to the push button rather than give you git commands, and to commit without
+  Co-Authored-By lines.
+- The variable's name box in the settings looks like the others.
 ## 0.11.0
 
 - New: session variables. Add names and values in Sessions' settings (like ANTHROPIC_API_KEY for an app a session

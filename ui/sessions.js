@@ -7,6 +7,8 @@ import {
 } from '/elf-kit/1/kit.js';
 
 const SESSION = /^s[0-9]{10,16}$/;
+/** A message that only asks to push: the desk does that, with the push box. */
+const PUSH_ASK = /^(please\s+|ok(ay)?,?\s+|yes,?\s+)?(go ahead and\s+)?push(\s+(it|this|that|them|the (commit|commits|work|changes|branch)))?(\s+(now|please|to github|to (the )?pr))*[.!]*$/i;
 const FILE = /^(s[0-9]{10,16})\.json$/;
 /** Routes: '', s/<id>, new, new/<elf>/<ref>/<title> (from another elf, a todo say), link/<id>/<elf>/<ref>/<title>. */
 const ELF = /^[a-z0-9][a-z0-9-]{0,40}$/;
@@ -1026,6 +1028,14 @@ class SessionsTab extends LitElement {
         }
         const ready = files.filter(f => f.status === 'ready');
         const text = box.value.trim();
+        // "push" (please push, push it…) is for the desk, not the agent, which can't: it opens the push box instead.
+        if (this._github && !ready.length && PUSH_ASK.test(text) && !working(s)) {
+            box.value = '';
+            this._grow(box);
+            elf.store.set(`draft:${s.id}`, '').catch(() => {});
+            await this._pushPreview(s);
+            return;
+        }
         if (!text && !ready.length && !s.queued?.length) return;
         const r = await this._act('send', { session: s.id, text: text || (ready.length ? 'See the attached files.' : ''), ...(ready.length ? { files: ready.map(f => f.id).join(',') } : {}) }, 'Couldn\'t send it');
         if (r) {
