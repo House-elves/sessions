@@ -632,7 +632,7 @@ class SessionsTab extends LitElement {
                 ${p.update ? html`<span class="t-dim">(replaces what's there: the session's work is kept as one commit on ${p.base})</span>`
                     : html`<span class="t-dim">a new branch from ${p.base}, then a draft PR on ${p.repo}</span>`}</div>
             ${(p.commits ?? []).map(c => html`<div class="t-dim">${c.sha.slice(0, 7)} <span class="t-ink">${c.subject}</span></div>`)}
-            ${p.diffstat ? html`<pre class="t-stat">${p.diffstat}</pre>` : nothing}
+            ${p.diffstat ? html`<pre class="t-stat">${p.diffstat.replace(/^(?=\S)/, ' ')}</pre>` : nothing}
             ${this._pushDiff ? html`<pre class="t-diff">${p.patch}${p.patchCut ? '\n… (cut short: see it all on GitHub)' : ''}</pre>` : nothing}
             <div class="t-row">
                 ${p.already ? nothing : html`<button class="t-btn t-acc" ?disabled=${busy || !!this._busy} @click=${() => this._doPush(s, p)}>
