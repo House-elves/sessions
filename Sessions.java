@@ -746,8 +746,10 @@ public class Sessions implements Callable<Integer> {
         }
         s.remove("pendingPush");
         if (in.path("status").asInt() != 200) {
+            String why = pushError(in.path("error").asText("It wasn't pushed"), config);
+            pushed(s, to, pending, false, null, why);
             save(s);
-            throw new IllegalStateException(in.path("error").asText("It wasn't pushed"));
+            throw new IllegalStateException(why);
         }
         String token = token(config);
         String headRepo = pending.path("headRepo").asText(""), headRef = pending.path("headRef").asText("");
@@ -776,12 +778,39 @@ public class Sessions implements Callable<Integer> {
             if (open == null || open.isBlank()) note = "Pushed, but GitHub didn't open the PR: open it from " + headRepo + ":" + headRef + ".";
             else s.put("pr", open.strip());
         }
+        pushed(s, to, pending, true, s.path("pr").asText(null), note);
         save(s);
         ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("pushed", to)
                 .put("target", headRepo + ":" + headRef);
         if (s.path("pr").isTextual()) out.put("pr", s.path("pr").asText());
         if (note != null) out.put("note", note);
         return out;
+    }
+
+    /**
+     * A push as the chat shows it, between the turns, and as the agent is told with your next message: where it went,
+     * or why it didn't.
+     */
+    static void pushed(ObjectNode s, String to, JsonNode pending, boolean ok, String pr, String text) {
+        ArrayNode list = s.withArray("pushes");
+        ObjectNode e = list.addObject().put("at", Instant.now().toString()).put("to", to)
+                .put("target", pending.path("target").asText()).put("ok", ok);
+        if (pr != null) e.put("pr", pr);
+        if (text != null) e.put(ok ? "note" : "error", clip(text, 600));
+        while (list.size() > 20) list.remove(0);
+    }
+
+    /** GitHub's refusals, in words that say what to do. */
+    static String pushError(String error, Config config) {
+        if (error.contains("workflow") && error.contains("scope")) {
+            return "GitHub refused it: the commit changes GitHub Actions workflows (.github/workflows), and gh's login for "
+                    + config.githubLogin + " isn't allowed to. Run gh auth refresh -h github.com -s workflow (as "
+                    + config.githubLogin + "), then push again.";
+        }
+        if (error.contains("Permission") && error.contains("denied") || error.contains("403")) {
+            return "GitHub refused it: " + config.githubLogin + " can't push to that branch. " + clip(error, 200);
+        }
+        return error;
     }
 
     static List<String> append(List<String> cmd, String... more) {
@@ -866,6 +895,21 @@ public class Sessions implements Callable<Integer> {
                 + "Use them by name; never print, log or commit their values.</desk-note>";
     }
 
+    /** The pushes since the agent last heard: what it's told with this message, once. */
+    static String pushesNote(ObjectNode s) {
+        StringBuilder b = new StringBuilder();
+        for (JsonNode e : s.withArray("pushes")) {
+            if (e.path("told").asBoolean()) continue;
+            String commit = e.path("to").asText();
+            commit = commit.length() > 8 ? commit.substring(0, 8) : commit;
+            b.append(e.path("ok").asBoolean()
+                    ? "I pushed " + commit + " to " + e.path("target").asText() + (e.path("pr").isTextual() ? " (" + e.path("pr").asText() + ")" : "") + ". "
+                    : "My push of " + commit + " to " + e.path("target").asText() + " failed: " + e.path("error").asText() + " ");
+            ((ObjectNode) e).put("told", true);
+        }
+        return b.isEmpty() ? "" : "\n<desk-note>Since your last reply: " + b.toString().strip() + "</desk-note>";
+    }
+
     /** unqueue: takes a message you queued off, before it's sent. */
     static JsonNode unqueue(JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
@@ -923,13 +967,14 @@ public class Sessions implements Callable<Integer> {
             for (ObjectNode f : files) list.addObject().put("name", f.path("name").asText()).put("kind", f.path("kind").asText()).put("file", f.path("file").asText());
         }
         while (turns.size() > MAX_TURNS) turns.remove(0);
+        String pushes = pushesNote(s);
         save(s);
 
         ObjectNode agent = JSON.createObjectNode().put("id", agentId);
         agent.putObject("checkout").put("repo", s.path("repo").asText()).put("number", 0).put("kind", "REPO")
                 .put("slot", s.path("id").asText());
         if (!vars.isEmpty()) agent.set("env", vars);
-        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + SUGGEST_RULE + varsNote(vars, bob));
+        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + SUGGEST_RULE + varsNote(vars, bob) + pushes);
         if (!images.isEmpty()) agent.set("images", images);
         // The session keeps the agent it started with: neither can resume the other's.
         if (bob) agent.put("agent", "bob");

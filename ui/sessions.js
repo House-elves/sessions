@@ -7,6 +7,8 @@ import {
 } from '/elf-kit/1/kit.js';
 
 const SESSION = /^s[0-9]{10,16}$/;
+/** A PR's link as "PR #140". */
+const prLabel = url => { const m = /\/pull\/(\d+)/.exec(url ?? ''); return m ? `PR #${m[1]}` : 'its PR'; };
 /** A message that only asks to push: the desk does that, with the push box. */
 const PUSH_ASK = /^(please\s+|ok(ay)?,?\s+|yes,?\s+)?(go ahead and\s+)?push(\s+(it|this|that|them|the (commit|commits|work|changes|branch)))?(\s+(now|please|to github|to (the )?pr))*[.!]*$/i;
 const FILE = /^(s[0-9]{10,16})\.json$/;
@@ -608,7 +610,7 @@ class SessionsTab extends LitElement {
             </header>
             ${this._goal(s)}
             <div class="t-log" aria-live="polite" @scroll=${e => { this._stick = e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight < 40; }}>
-                ${(s.turns ?? []).map((t, i) => this._turn(t, i))}
+                ${(s.turns ?? []).map((t, i, all) => html`${this._turn(t, i)}${this._pushes(s, t, all[i + 1])}`)}
             </div>
             ${this._pushBox(s, busy)}
             ${this._compose(s, busy)}
@@ -622,7 +624,8 @@ class SessionsTab extends LitElement {
         this._pushDiff = false;
         const prs = this._push?.session === s.id ? this._push.prs : null;
         const p = await this._act('push-preview', { session: s.id, ...(pr ? { pr } : {}) }, 'Couldn\'t read its commits');
-        if (p && p.session === s.id) this._push = { ...p, prs: p.prs ?? prs };
+        // With open PRs of yours on the repo, where the first push goes is yours to pick, not a default.
+        if (p && p.session === s.id) this._push = { ...p, prs: p.prs ?? prs, chosen: pr !== undefined };
         else if (!pr) this._push = null;
     }
 
@@ -637,12 +640,13 @@ class SessionsTab extends LitElement {
                 return;
             }
             this._otherPr = false;
-            this._pushPreview(s, v ? Number(v) : 0);
+            this._pushPreview(s, v === 'new' ? 0 : Number(v));
         };
         const mine = p.prs ?? [];
         return html`<div class="t-row"><span class="t-dim">onto</span>
             <select class="t-sel" aria-label="Where it goes" ?disabled=${busy || !!this._busy} @change=${pick}>
-                <option value="" ?selected=${!p.prNumber}>a new branch and draft PR</option>
+                ${p.chosen || !mine.length ? nothing : html`<option value="" selected disabled>choose where it goes…</option>`}
+                <option value="new" ?selected=${p.chosen && !p.prNumber || !mine.length && !p.prNumber}>a new branch and draft PR</option>
                 ${mine.map(x => html`<option value=${x.number} ?selected=${p.prNumber === x.number}>PR #${x.number}: ${x.title}</option>`)}
                 ${p.prNumber && !mine.some(x => x.number === p.prNumber) ? html`<option value=${p.prNumber} selected>PR #${p.prNumber}: ${p.prTitle}</option>` : nothing}
                 <option value="other">another PR, by its number…</option>
@@ -664,17 +668,19 @@ class SessionsTab extends LitElement {
         const p = this._push?.session === s.id ? this._push : null;
         if (!p) return nothing;
         const n = (p.commits ?? []).length;
+        const unchosen = !p.update && !p.already && !p.chosen && (p.prs ?? []).length > 0 && !(p.pr && !p.prNumber);
         return html`<div class="t-push">
             ${this._pushWhere(s, p, busy)}
+            ${unchosen ? html`<div class="t-dim">You have open PRs on ${p.repo}: push onto one of them, or to a new branch and draft PR.</div>` : html`
             <div><b>${p.already ? 'Already pushed' : p.update ? 'Update' : 'Push to'}</b> ${p.target}
                 ${p.update ? html`<span class="t-dim">(replaces what's there: the session's work is kept as one commit on ${p.base})</span>`
                     : p.prNumber ? html`<span class="t-warn">replaces the ${count(p.replacesCommits, 'commit')} on PR #${p.prNumber} with the session's work, as one commit on ${p.base}</span>`
-                    : html`<span class="t-dim">a new branch from ${p.base}, then a draft PR on ${p.repo}</span>`}</div>
+                    : html`<span class="t-dim">a new branch from ${p.base}, then a draft PR on ${p.repo}</span>`}</div>`}
             ${(p.commits ?? []).map(c => html`<div class="t-dim">${c.sha.slice(0, 7)} <span class="t-ink">${c.subject}</span></div>`)}
             ${p.diffstat ? html`<pre class="t-stat">${p.diffstat.replace(/^(?=\S)/, ' ')}</pre>` : nothing}
             ${this._pushDiff ? html`<pre class="t-diff">${p.patch}${p.patchCut ? '\n… (cut short: see it all on GitHub)' : ''}</pre>` : nothing}
             <div class="t-row">
-                ${p.already ? nothing : html`<button class="t-btn t-acc" ?disabled=${busy || !!this._busy} @click=${() => this._doPush(s, p)}>
+                ${p.already ? nothing : unchosen ? html`<span class="t-warn">choose where it goes first</span>` : html`<button class="t-btn t-acc" ?disabled=${busy || !!this._busy} @click=${() => this._doPush(s, p)}>
                     ${this._busy === 'push' || this._busy === 'push-done' ? 'pushing…' : `push ${n} commit${n === 1 ? '' : 's'} as ${p.as}`}</button>`}
                 ${p.patch ? html`<button class="t-btn" @click=${() => { this._pushDiff = !this._pushDiff; }}>${this._pushDiff ? 'hide the diff' : 'show the diff'}</button>` : nothing}
                 ${p.pr ? html`<a href=${p.pr} target="_blank" rel="noopener">${p.prNumber ? `PR #${p.prNumber}` : 'its PR'}</a>` : nothing}
@@ -808,6 +814,15 @@ class SessionsTab extends LitElement {
                         typeof t.cost === 'number' ? ` · $${t.cost.toFixed(2)}` : ''}${
                         typeof t.bobcoins === 'number' ? ` · ${t.bobcoins.toFixed(2)} Bobcoins` : ''}${t.model ? ` · ${modelName(t.model)}` : ''}</span>
                     <button class="t-btn" @click=${() => this._toggleLines(t)}>${shown ? 'hide steps' : 'show steps'}</button></div>`}`;
+    }
+
+    /** The pushes made after this turn (and before the next): where they went, or why they didn't. */
+    _pushes(s, t, next) {
+        const from = Date.parse(t.at), to = next ? Date.parse(next.at) : Infinity;
+        const list = (s.pushes ?? []).filter(p => Date.parse(p.at) >= from && Date.parse(p.at) < to);
+        return list.map(p => html`<div class="t-line ${p.ok ? 't-green' : 't-red'}"><span class="t-dot">${p.ok ? '✓' : '✗'}</span><span>${p.ok
+            ? html`Pushed ${p.to.slice(0, 7)} to ${p.target}${p.pr ? html` · <a href=${p.pr} target="_blank" rel="noopener">${prLabel(p.pr)}</a>` : ''}${p.note ? html` <span class="t-warn">${p.note}</span>` : ''}`
+            : html`Push of ${p.to.slice(0, 7)} to ${p.target} failed: ${p.error}`} <span class="t-dim">· ${ago(p.at)}</span></span></div>`);
     }
 
     async _toggleLines(t) {

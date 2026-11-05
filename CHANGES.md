@@ -1,5 +1,12 @@
 # What's new
 
+## 0.11.2
+
+- Each push shows in the chat, where it happened: ✓ where it went and its PR, or ✗ why GitHub refused it, in words
+  that say what to do (like gh's login needing the workflow scope for a commit that changes .github/workflows). The
+  agent is told too, with your next message.
+- With open PRs of yours on the repo, a session's first push asks where it goes (one of them, or a new branch and
+  draft PR) instead of defaulting to a new branch.
 ## 0.11.1
 
 - "push" (or "please push", "push it") typed in the chat opens the push box, since the agent can't push. The agent
