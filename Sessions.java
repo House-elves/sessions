@@ -657,6 +657,10 @@ public class Sessions implements Callable<Integer> {
         if (!in.path("to").asText("").equals(p.path("to").asText()) || !in.path("target").asText("").equals(p.path("target").asText())) {
             throw new IllegalStateException("The work changed since you looked: look at it again");
         }
+        int n = p.path("commits").size();
+        if (!in.path("commits").asText("").equals(n + (n == 1 ? " commit" : " commits"))) {
+            throw new IllegalStateException("The work changed since you looked: look at it again");
+        }
         if (p.path("already").asBoolean()) throw new IllegalStateException("That's pushed already");
         ObjectNode push = JSON.createObjectNode().put("repo", s.path("repo").asText()).put("number", 0)
                 .put("slot", s.path("id").asText()).put("headRepo", p.path("headRepo").asText())
@@ -664,6 +668,10 @@ public class Sessions implements Callable<Integer> {
         String pushed = s.path("pushed").asText("");
         if (pushed.isEmpty()) push.put("from", p.path("from").asText());
         else push.put("from", pushed).put("squash", true).put("base", p.path("base").asText());
+        // What push-done may finish: only this push, handed to the runner now, and only for a while.
+        s.putObject("pendingPush").put("to", p.path("to").asText()).put("target", p.path("target").asText())
+                .put("at", Instant.now().toString());
+        save(s);
         push.put("token", token);
         return JSON.createObjectNode().put("session", s.path("id").asText()).set("push", push);
     }
@@ -675,10 +683,21 @@ public class Sessions implements Callable<Integer> {
     static JsonNode pushDone(Config config, JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
         String to = in.path("to").asText("");
-        if (in.path("status").asInt() != 200) throw new IllegalStateException(in.path("error").asText("It wasn't pushed"));
-        if (!SHA.matcher(to).matches()) throw new IllegalArgumentException("Not a commit");
+        // Only the push the push action just handed to the runner (on your confirm), once.
+        JsonNode pending = s.path("pendingPush");
+        boolean fresh = pending.path("at").isTextual()
+                && Instant.parse(pending.path("at").asText()).isAfter(Instant.now().minusSeconds(900));
+        if (!fresh || !SHA.matcher(to).matches() || !to.equals(pending.path("to").asText())) {
+            throw new IllegalStateException("No push of that is waiting: push it again");
+        }
+        s.remove("pendingPush");
+        if (in.path("status").asInt() != 200) {
+            save(s);
+            throw new IllegalStateException(in.path("error").asText("It wasn't pushed"));
+        }
         String token = token(config);
         String headRepo = headRepo(config, s, token), headRef = branch(s);
+        if (!pending.path("target").asText().equals(headRepo + ":" + headRef)) throw new IllegalStateException("No push there is waiting: push it again");
         String there = run(List.of("gh", "api", "repos/" + headRepo + "/branches/" + headRef, "--jq", ".commit.sha"), token);
         if (!to.equals(there == null ? "" : there.strip())) throw new IllegalStateException("GitHub doesn't show that commit on " + headRepo + ":" + headRef);
         s.put("pushed", to).put("branch", headRef).put("headRepo", headRepo).put("pushedAt", Instant.now().toString());
