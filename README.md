@@ -15,6 +15,7 @@ your desk.
 - **A console:** an open session looks like Claude Code in a terminal and fills the desk's window; only the
   conversation scrolls. Type straight into the prompt: Enter sends, Ctrl+Enter starts a new line, Esc interrupts.
   When the agent suggests what you'd likely say next, it shows in the empty prompt: Tab takes it.
+  While it works, Enter queues your message: it goes when the turn ends (runner 0.51.0).
   Paste a screenshot, drag files onto the session (or the New session form), or attach them: images and PDFs go to Claude Code with your message (up to 4
   together, a PDF up to 3 MB; not to IBM Bob), and text files (up to 100 KB each) and Word files (.docx, up to 3 MB,
   read as text with tables as rows) go into the message. An old .doc file isn't read: save it as .docx or PDF.

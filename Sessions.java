@@ -50,6 +50,7 @@ public class Sessions implements Callable<Integer> {
     /** A text file goes into the message: at most this much each, and all of a message's together. */
     static final int MAX_DOC_CHARS = 100_000, MAX_DOCS_CHARS = 150_000;
     static final int MAX_FILES = 10;
+    static final int MAX_QUEUED = 5;
     /** A PDF (shown to Claude whole) or a Word file (read as text): at most this big, so about 4 MB as a data URL. */
     static final int MAX_DOCUMENT_BYTES = 3_000_000;
     static final String DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -127,6 +128,7 @@ public class Sessions implements Callable<Integer> {
                 case "link-context" -> linkContext(in);
                 case "send" -> send(in);
                 case "agent-done" -> agentDone(in);
+                case "unqueue" -> unqueue(in);
                 case "attach" -> attach(in);
                 case "rename" -> rename(in);
                 case "archive" -> archive(in);
@@ -500,12 +502,66 @@ public class Sessions implements Callable<Integer> {
     }
 
     /** send: your next message in a session, as its next turn. */
+    /**
+     * send: your message. While the agent works on the last one it's queued, as in Claude Code, and goes when that turn
+     * ends (agent-done starts it, runner 0.51.0), with any others you queued, as one message. A queue left by a turn
+     * you stopped or that failed goes with your next message (or alone, with no text).
+     */
     static JsonNode send(JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
         String text = in.path("text").asText("").strip();
         String files = in.path("files").asText("");
-        if ((text.isEmpty() && files.isEmpty()) || text.length() > MAX_TEXT) throw new IllegalArgumentException("Write a message");
-        return turn(s, text, files);
+        boolean queued = !s.path("queued").isEmpty();
+        if ((text.isEmpty() && files.isEmpty() && !queued) || text.length() > MAX_TEXT) throw new IllegalArgumentException("Write a message");
+        harvest(s);
+        if (running(s)) {
+            if (text.isEmpty() && files.isEmpty()) throw new IllegalArgumentException("Write a message");
+            if (!runnerAtLeast(0, 51)) throw new IllegalStateException("It's still working on your last message. Sending the next one while it works needs runner 0.51.0 or later: update the desk");
+            ArrayNode q = s.withArray("queued");
+            if (q.size() >= MAX_QUEUED) throw new IllegalStateException("You've queued " + MAX_QUEUED + " messages already: wait for it, or press esc to interrupt it");
+            int count = files.isEmpty() ? 0 : files.split(",").length;
+            for (JsonNode m : q) count += m.path("files").asText("").isEmpty() ? 0 : m.path("files").asText().split(",").length;
+            if (count > MAX_FILES) throw new IllegalArgumentException("A message takes at most " + MAX_FILES + " files, with the ones you queued");
+            files(s.path("id").asText(), files); // they must be there
+            q.addObject().put("text", text).put("files", files).put("at", Instant.now().toString());
+            save(s);
+            return JSON.createObjectNode().put("session", s.path("id").asText()).put("queued", q.size());
+        }
+        return next(s, text, files);
+    }
+
+    /** The turn that sends what you queued (oldest first) and this message, as one; the queue goes once it's sent. */
+    static JsonNode next(ObjectNode s, String text, String files) throws IOException {
+        List<String> texts = new ArrayList<>(), ids = new ArrayList<>();
+        for (JsonNode m : s.path("queued")) {
+            if (!m.path("text").asText("").isBlank()) texts.add(m.path("text").asText());
+            if (!m.path("files").asText("").isBlank()) ids.add(m.path("files").asText());
+        }
+        if (!text.isEmpty()) texts.add(text);
+        if (!files.isEmpty()) ids.add(files);
+        String all = String.join("\n\n", texts);
+        if (all.length() > MAX_TEXT) throw new IllegalArgumentException("Your queued messages and this one are too long together: take one off");
+        s.remove("queued");
+        return turn(s, all, String.join(",", ids));
+    }
+
+    static boolean running(JsonNode s) {
+        for (JsonNode t : s.path("turns")) {
+            if (t.path("status").asText().equals("running")) return true;
+        }
+        return false;
+    }
+
+    /** unqueue: takes a message you queued off, before it's sent. */
+    static JsonNode unqueue(JsonNode in) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        ArrayNode q = s.withArray("queued");
+        int n = in.path("n").asInt(-1);
+        if (n < 0 || n >= q.size()) throw new IllegalArgumentException("It isn't queued any more");
+        q.remove(n);
+        if (q.isEmpty()) s.remove("queued");
+        save(s);
+        return JSON.createObjectNode().put("session", s.path("id").asText());
     }
 
     /**
@@ -607,6 +663,15 @@ public class Sessions implements Callable<Integer> {
         ObjectNode s = load(m.group(1));
         harvest(s);
         save(s);
+        // What you queued while it worked goes now, if it finished; after a stop or a failure it waits for you.
+        JsonNode last = s.path("turns").path(s.path("turns").size() - 1);
+        if (!s.path("queued").isEmpty() && !running(s) && last.path("status").asText().equals("done")) {
+            try {
+                return next(s, "", "");
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                System.err.println("Couldn't send what you queued: " + e.getMessage()); // it stays queued, for you to see
+            }
+        }
         return JSON.createObjectNode().put("session", s.path("id").asText());
     }
 

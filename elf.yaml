@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.8.0
+version: 0.9.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -87,13 +87,14 @@ actions:
     ask: false
     params:
       link: {pattern: "[a-z0-9][a-z0-9-]{0,40}:[A-Za-z0-9._-]{1,80}", max: 130}
+  # While the agent works, a message is queued, and goes when the turn ends (with no text: what you queued, now).
   send:
     label: Send a message
     args: [--action=send]
     ask: false
     params:
       session: {pattern: "s[0-9]{10,16}"}
-      text: {pattern: "[\\s\\S]{1,20000}", max: 20000}
+      text: {pattern: "[\\s\\S]{0,20000}", optional: true, max: 20000}
       files: {pattern: "([0-9a-f]{16}(,[0-9a-f]{16}){0,9})?", optional: true, max: 200}
   attach:
     label: Keep a file you attached to a message
@@ -113,6 +114,13 @@ actions:
     ask: false
     params:
       id: {pattern: "s[0-9]{10,16}-t[0-9]{1,5}"}
+  unqueue:
+    label: Take a queued message off
+    args: [--action=unqueue]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      n: {pattern: "[0-9]", max: 1}
   rename:
     label: Rename a session
     args: [--action=rename]

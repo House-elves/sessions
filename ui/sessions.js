@@ -275,6 +275,10 @@ class SessionsTab extends LitElement {
             border: 1px solid var(--t-line); border-radius: 6px; background: #fff; z-index: 2; }
         .t-file:hover img { display: block; }
         .t-input { padding: 6px 12px 8px; display: grid; gap: 4px; }
+        /* Messages you sent while it worked: they go when the turn ends. */
+        .t-queue { display: grid; gap: 2px; color: var(--t-dim); }
+        .t-queue div { display: flex; gap: 8px; align-items: baseline; }
+        .t-queue .t-qtext { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--t-ink); opacity: .75; flex: 1; }
         .t-box { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--t-line); border-radius: 8px; padding: 6px 10px; }
         .t-box:focus-within { border-color: var(--t-dim); }
         .t-box.busy { border-style: dashed; }
@@ -720,13 +724,19 @@ class SessionsTab extends LitElement {
         const files = this._files ?? [];
         const hint = suggestion(s, busy);
         const n = totals(s);
+        const queue = Array.isArray(s.queued) ? s.queued : [];
         return html`<div class="t-input">
+            ${queue.length ? html`<div class="t-queue">${queue.map((m, k) => html`<div><span>&gt;</span>
+                <span class="t-qtext">${m.text || ''}${m.files ? ` [${m.files.split(',').length} file${m.files.includes(',') ? 's' : ''}]` : ''}</span>
+                <button class="t-btn" title="Take it off" @click=${() => this._act('unqueue', { session: s.id, n: String(k) }, 'Couldn\'t take it off')}>×</button></div>`)}
+                <div><span>${busy ? 'queued: sent when it finishes' : 'not sent yet: it goes with your next message'}${busy ? '' : html` · <button class="t-btn" @click=${() => this._send(s, this.renderRoot.querySelector('.t-area'))}>send now</button>`}</span></div>
+            </div>` : nothing}
             ${files.length ? html`<div class="t-files">${files.map((f, k) => html`<span class="t-file ${f.status}">
                 ${f.kind === 'image' ? `[Image #${k + 1}]` : `[${f.name}]`}${f.status === 'sending' ? ` ${f.sent ?? 0}%` : f.status === 'failed' ? ` ✗ ${f.error}` : ''}
                 <button class="t-btn" title="Take it off" @click=${() => { this._files = files.filter(x => x !== f); }}>×</button></span>`)}</div>` : nothing}
             <div class="t-box ${busy ? 'busy' : ''}"><span class="t-prompt">&gt;</span>
                 <textarea class="t-area" name="text" rows="1" aria-label="Your message" maxlength="20000" spellcheck="false"
-                    placeholder=${busy ? 'Working… type your next message; esc to interrupt' : hint ? `${hint}   (tab to use it)` : 'Type a message: enter to send'}
+                    placeholder=${busy ? 'Working… type your next message: enter queues it, esc interrupts' : hint ? `${hint}   (tab to use it)` : 'Type a message: enter to send'}
                     @input=${e => { this._grow(e.target); elf.store.set(`draft:${s.id}`, e.target.value).catch(() => {}); }}
                     @keydown=${e => this._key(e, s, busy)} @paste=${e => this._paste(e, s)}></textarea>
             </div>
@@ -770,10 +780,7 @@ class SessionsTab extends LitElement {
             return;
         }
         e.preventDefault();
-        if (busy) {
-            this._error = 'It\'s still working on your last message: wait for it, or press esc to interrupt it.';
-            return;
-        }
+        // While it works, the message is queued and goes when the turn ends, as in Claude Code.
         this._send(s, e.target);
     }
 
@@ -917,8 +924,8 @@ class SessionsTab extends LitElement {
         }
         const ready = files.filter(f => f.status === 'ready');
         const text = box.value.trim();
-        if (!text && !ready.length) return;
-        const r = await this._act('send', { session: s.id, text: text || 'See the attached files.', ...(ready.length ? { files: ready.map(f => f.id).join(',') } : {}) }, 'Couldn\'t send it');
+        if (!text && !ready.length && !s.queued?.length) return;
+        const r = await this._act('send', { session: s.id, text: text || (ready.length ? 'See the attached files.' : ''), ...(ready.length ? { files: ready.map(f => f.id).join(',') } : {}) }, 'Couldn\'t send it');
         if (r) {
             box.value = '';
             this._grow(box);

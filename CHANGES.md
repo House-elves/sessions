@@ -1,5 +1,11 @@
 # What's new
 
+## 0.9.0
+
+- New: type and press Enter while the agent works, as in Claude Code: your message is queued (it shows above the
+  prompt, with × to take it off) and goes as soon as the turn ends, even with the tab closed. Several queued messages go
+  together as one. If you interrupt it (esc), or the turn fails, what you queued waits: it goes with your next message,
+  or press "send now". Needs runner 0.51.0.
 ## 0.8.0
 
 - New: a suggested next message, as in Claude Code. When the agent sees an obvious next step, it suggests what you'd
