@@ -554,7 +554,7 @@ public class Sessions implements Callable<Integer> {
         ObjectNode agent = JSON.createObjectNode().put("id", agentId);
         agent.putObject("checkout").put("repo", s.path("repo").asText()).put("number", 0).put("kind", "REPO")
                 .put("slot", s.path("id").asText());
-        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs);
+        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + SUGGEST_RULE);
         if (!images.isEmpty()) agent.set("images", images);
         // The session keeps the agent it started with: neither can resume the other's.
         if (bob) agent.put("agent", "bob");
@@ -574,6 +574,23 @@ public class Sessions implements Callable<Integer> {
         if (!m.find()) return false;
         int a = Integer.parseInt(m.group(1)), b = Integer.parseInt(m.group(2));
         return a > major || (a == major && b >= minor);
+    }
+
+    /**
+     * Asked of the agent with every message: the message you'd most likely send next, on a last line of its own. The
+     * console shows it in the empty prompt, and Tab takes it, as in Claude Code; it's kept off the reply.
+     */
+    static final String SUGGEST_RULE = "\n\n<desk-note>If there is an obvious next step for me, end your reply with one last line: "
+            + "\"Next: \" and the message I would most likely send you next, in my own words, under 100 characters "
+            + "(like \"Yes, go ahead\" or \"Run the tests\"). Leave the line out when there isn't one. My chat shows it as a "
+            + "suggestion I can take, not as part of your answer.</desk-note>";
+    static final Pattern SUGGESTION = Pattern.compile("(?s)^(?:(.*)\\n)?[ \\t]*(?:\\*\\*|_)?Next:(?:\\*\\*|_)?[ \\t]*`?\"?([^\\n]{1,300}?)\"?`?[ \\t]*$");
+
+    /** A reply's last line "Next: …" taken off it: the reply without it, and the suggestion (or null). */
+    static String[] suggestion(String reply) {
+        Matcher m = SUGGESTION.matcher(reply.stripTrailing());
+        if (!m.matches() || m.group(2).isBlank()) return new String[] { reply, null };
+        return new String[] { m.group(1) == null ? "" : m.group(1).stripTrailing(), oneLine(m.group(2).strip(), 200) };
     }
 
     /** What the agent is given each turn: the goal as you last edited it, or the first message. */
@@ -616,7 +633,9 @@ public class Sessions implements Callable<Integer> {
                 String status = a.path("status").asText("");
                 switch (status) {
                     case "done" -> {
-                        turn.put("status", "done").put("reply", clip(a.path("output").path("reply").asText(""), MAX_REPLY));
+                        String[] r = suggestion(a.path("output").path("reply").asText(""));
+                        turn.put("status", "done").put("reply", clip(r[0], MAX_REPLY));
+                        if (r[1] != null) turn.put("suggest", r[1]);
                         String session = a.path("session").asText("");
                         if (session.matches("[A-Za-z0-9-]{1,100}")) s.put("session", session);
                     }

@@ -111,6 +111,12 @@ function totals(s) {
     };
 }
 /** The tags in its settings (TAGS), as spelled there. */
+/** The message you'd most likely send next, as the agent suggested at the end of its last reply; none while it works. */
+const suggestion = (s, busy) => {
+    const last = s?.turns?.at(-1);
+    return !busy && last?.status === 'done' && typeof last.suggest === 'string' ? last.suggest : '';
+};
+
 const settingsTags = values => [...new Set((values?.TAGS ?? '').split(',').map(t => t.trim()).filter(Boolean))];
 const tagged = (s, tag) => !tag || (s.tags ?? []).includes(tag);
 
@@ -712,6 +718,7 @@ class SessionsTab extends LitElement {
      */
     _compose(s, busy) {
         const files = this._files ?? [];
+        const hint = suggestion(s, busy);
         const n = totals(s);
         return html`<div class="t-input">
             ${files.length ? html`<div class="t-files">${files.map((f, k) => html`<span class="t-file ${f.status}">
@@ -719,12 +726,12 @@ class SessionsTab extends LitElement {
                 <button class="t-btn" title="Take it off" @click=${() => { this._files = files.filter(x => x !== f); }}>×</button></span>`)}</div>` : nothing}
             <div class="t-box ${busy ? 'busy' : ''}"><span class="t-prompt">&gt;</span>
                 <textarea class="t-area" name="text" rows="1" aria-label="Your message" maxlength="20000" spellcheck="false"
-                    placeholder=${busy ? 'Working… type your next message; esc to interrupt' : 'Type a message: enter to send'}
+                    placeholder=${busy ? 'Working… type your next message; esc to interrupt' : hint ? `${hint}   (tab to use it)` : 'Type a message: enter to send'}
                     @input=${e => { this._grow(e.target); elf.store.set(`draft:${s.id}`, e.target.value).catch(() => {}); }}
                     @keydown=${e => this._key(e, s, busy)} @paste=${e => this._paste(e, s)}></textarea>
             </div>
             <div class="t-foot">
-                <span>enter to send · ctrl+enter new line · paste or drag in images, PDFs, Word and text files ·
+                <span>enter to send · ctrl+enter new line ·${suggestion(s, busy) ? ' tab takes the suggestion ·' : ''} paste or drag in images, PDFs, Word and text files ·
                     <button class="t-btn" @click=${() => this.renderRoot.querySelector('.t-pick')?.click()}>attach</button>
                     ${busy ? html` · <button class="t-btn" @click=${() => this._stop(s)}>esc to interrupt</button>` : nothing}</span>
                 <span class="t-grow"></span>
@@ -739,6 +746,17 @@ class SessionsTab extends LitElement {
         if (e.key === 'Escape' && busy) {
             e.preventDefault();
             this._stop(s);
+            return;
+        }
+        // Tab in the empty prompt takes the suggested next message, as in Claude Code; Enter then sends it.
+        if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && !e.target.value) {
+            const hint = suggestion(s, busy);
+            if (hint) {
+                e.preventDefault();
+                e.target.value = hint;
+                this._grow(e.target);
+                elf.store.set(`draft:${s.id}`, hint).catch(() => {});
+            }
             return;
         }
         if (e.key !== 'Enter' || e.isComposing) return;

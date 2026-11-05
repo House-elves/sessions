@@ -1,5 +1,10 @@
 # What's new
 
+## 0.8.0
+
+- New: a suggested next message, as in Claude Code. When the agent sees an obvious next step, it suggests what you'd
+  likely say next; it shows in the empty prompt, Tab puts it there, and Enter sends it (or change it first). The
+  suggestion is kept off the reply. It starts with the next reply in a session, for Claude Code and IBM Bob.
 ## 0.7.2
 
 - New: drag files onto an open session and it shows where they go ("Drop to attach"); let go and they upload, as with
