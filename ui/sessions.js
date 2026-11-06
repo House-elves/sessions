@@ -149,7 +149,8 @@ function linkFiles(root, id) {
         let at = 0;
         for (let m = full.exec(text); m; m = full.exec(text)) {
             const path = m[0].replace(/[.,;:!?]+$/, '');
-            if (path.endsWith('/')) continue;
+            // A file, not a folder: its last part has an extension (demo.mp4).
+            if (!/\.[A-Za-z0-9]{1,10}$/.test(path.split('/').pop())) continue;
             parts.push(text.slice(at, m.index), link(root, path));
             at = m.index + path.length;
             full.lastIndex = at;

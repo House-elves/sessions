@@ -1,5 +1,9 @@
 # What's new
 
+## 0.15.1
+
+- Only paths to files become links, not folders.
+
 ## 0.15.0
 
 - New: files the agent names download on a click. A path to a file in the session's clone, like the video it made
