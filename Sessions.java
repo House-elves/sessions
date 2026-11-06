@@ -135,6 +135,10 @@ public class Sessions implements Callable<Integer> {
                 case "vars" -> vars();
                 case "var-set" -> varSet(in);
                 case "var-remove" -> varRemove(in);
+                case "gh-look" -> ghLook(config, in);
+                case "gh-close" -> ghDo(config, in, "close");
+                case "gh-comment" -> ghDo(config, in, "comment");
+                case "gh-merge" -> ghDo(config, in, "merge");
                 case "push-done" -> pushDone(config, in);
                 case "attach" -> attach(in);
                 case "rename" -> rename(in);
@@ -910,6 +914,121 @@ public class Sessions implements Callable<Integer> {
         return b.isEmpty() ? "" : "\n<desk-note>Since your last reply: " + b.toString().strip() + "</desk-note>";
     }
 
+
+    // ---- what the agent asks you to do on GitHub (it has no GitHub access): close, comment, merge, on your click ----
+
+    /** "Ask: close #298: Thanks, covered by #300", on a line of its own: a button under the reply. */
+    static final Pattern ASK = Pattern.compile("(?im)^[ \\t]*(?:[-*][ \\t]+)?(?:\\*\\*|_)?Ask:(?:\\*\\*|_)?[ \\t]*`?(close|comment|merge)[ \\t]+#([0-9]{1,7})`?"
+            + "(?:[ \\t]*[:\u2014-][ \\t]*(.{1,2000}?))?[ \\t]*$\\n?");
+    static final int MAX_ASKS = 10;
+
+    /** The reply without its asks, and the asks: [{kind, number, text}]. */
+    static Object[] asks(String reply) {
+        ArrayNode list = JSON.createArrayNode();
+        Matcher m = ASK.matcher(reply);
+        while (m.find() && list.size() < MAX_ASKS) {
+            ObjectNode a = list.addObject().put("kind", m.group(1).toLowerCase(java.util.Locale.ROOT)).put("number", Integer.parseInt(m.group(2)));
+            String text = m.group(3) == null ? "" : m.group(3).strip().replaceAll("^\"|\"$", "").replaceAll("^\u201c|\u201d$", "");
+            if (!text.isEmpty() && !a.path("kind").asText().equals("merge")) a.put("text", text);
+            if (a.path("kind").asText().equals("comment") && text.isEmpty()) list.remove(list.size() - 1);
+        }
+        return new Object[] { ASK.matcher(reply).replaceAll("").strip(), list };
+    }
+
+    static final Pattern GH_NUMBER = Pattern.compile("[0-9]{1,7}");
+
+    /** gh-look: the issue or PR an ask is about, as GitHub has it now, for you to read before you click. */
+    static JsonNode ghLook(Config config, JsonNode in) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        return look(s, in.path("number").asInt(0), token(config), config);
+    }
+
+    static ObjectNode look(ObjectNode s, int number, String token, Config config) throws Exception {
+        if (number <= 0) throw new IllegalArgumentException("Which one?");
+        String repo = s.path("repo").asText();
+        String json = run(List.of("gh", "api", "repos/" + repo + "/issues/" + number, "--jq",
+                "{title, state, url: .html_url, author: .user.login, pr: (.pull_request != null)}"), token);
+        if (json == null || json.isBlank()) throw new IllegalArgumentException(repo + " has no #" + number + " that " + config.githubLogin + " can see");
+        ObjectNode out = (ObjectNode) JSON.readTree(json);
+        out.put("session", s.path("id").asText()).put("repo", repo).put("number", number).put("as", config.githubLogin)
+                .put("title", oneLine(out.path("title").asText(), 200));
+        if (out.path("pr").asBoolean()) {
+            String pr = run(List.of("gh", "api", "repos/" + repo + "/pulls/" + number, "--jq",
+                    "{sha: .head.sha, merged, mergeable_state, draft}"), token);
+            if (pr != null && !pr.isBlank()) out.setAll((ObjectNode) JSON.readTree(pr));
+        }
+        return out;
+    }
+
+    /**
+     * gh-close, gh-comment, gh-merge (each on your click in the desk's bar, which says what it does, as whom, and the
+     * comment word for word): on the session's repo only, with your gh account. What the bar showed is checked again
+     * here, and the ask is marked done on its turn.
+     */
+    static JsonNode ghDo(Config config, JsonNode in, String kind) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        int number = in.path("number").asInt(0);
+        if (!in.path("repo").asText("").equals(s.path("repo").asText())) throw new IllegalArgumentException("Only on the session's repo");
+        if (!in.path("as").asText("").equalsIgnoreCase(config.githubLogin)) throw new IllegalArgumentException("Not the account in Sessions' settings");
+        String token = token(config);
+        ObjectNode it = look(s, number, token, config);
+        String repo = s.path("repo").asText();
+        String comment = in.path("comment").asText("");
+        String done;
+        switch (kind) {
+            case "close" -> {
+                if (!it.path("state").asText().equals("open")) throw new IllegalStateException("#" + number + " is closed already");
+                if (!in.path("saying").asText("").equals(saying(comment))) throw new IllegalStateException("The comment changed since you looked: look again");
+                if (!comment.isBlank() && post(repo, number, comment, token) == null) throw new IllegalStateException("GitHub didn't take the comment, so it isn't closed");
+                String path = it.path("pr").asBoolean() ? "repos/" + repo + "/pulls/" + number : "repos/" + repo + "/issues/" + number;
+                if (run(List.of("gh", "api", "-X", "PATCH", path, "-f", "state=closed", "--jq", ".state"), token) == null) {
+                    throw new IllegalStateException("GitHub didn't close #" + number);
+                }
+                done = "closed";
+            }
+            case "comment" -> {
+                if (comment.isBlank()) throw new IllegalArgumentException("Say what to comment");
+                if (post(repo, number, comment, token) == null) throw new IllegalStateException("GitHub didn't take the comment");
+                done = "commented";
+            }
+            case "merge" -> {
+                if (!it.path("pr").asBoolean() || !it.path("state").asText().equals("open")) throw new IllegalStateException("#" + number + " isn't an open PR");
+                String sha = in.path("sha").asText("");
+                if (!SHA.matcher(sha).matches() || !sha.equals(it.path("sha").asText()) || !sha.startsWith(in.path("short").asText("-"))) throw new IllegalStateException("#" + number + " changed since you looked: look again");
+                String methods = run(List.of("gh", "api", "repos/" + repo, "--jq", "[.allow_merge_commit, .allow_squash_merge, .allow_rebase_merge] | @csv"), token);
+                String[] m = methods == null ? new String[0] : methods.split(",");
+                String method = m.length == 3 ? (m[0].equals("true") ? "merge" : m[1].equals("true") ? "squash" : m[2].equals("true") ? "rebase" : null) : null;
+                if (method == null) throw new IllegalStateException(repo + " allows no merge method");
+                if (run(List.of("gh", "api", "-X", "PUT", "repos/" + repo + "/pulls/" + number + "/merge", "-f", "merge_method=" + method,
+                        "-f", "sha=" + sha, "--jq", ".merged"), token) == null) {
+                    throw new IllegalStateException("GitHub didn't merge #" + number + " (are its checks and reviews done?)");
+                }
+                done = "merged";
+            }
+            default -> throw new IllegalArgumentException(kind);
+        }
+        // On its turn: the button says it's done.
+        for (JsonNode t : s.path("turns")) {
+            for (JsonNode a : t.path("asks")) {
+                if (a.path("number").asInt() == number && a.path("kind").asText().equals(kind) && !a.has("done")) {
+                    ((ObjectNode) a).put("done", done).put("at", Instant.now().toString());
+                }
+            }
+        }
+        save(s);
+        return JSON.createObjectNode().put("session", s.path("id").asText()).put("number", number).put("done", done)
+                .put("url", it.path("url").asText());
+    }
+
+    /** What the desk's bar says about a close's comment, word for word. */
+    static String saying(String comment) {
+        return comment.isBlank() ? "No comment." : "With the comment: \u201c" + comment.strip() + "\u201d";
+    }
+
+    static String post(String repo, int number, String body, String token) throws Exception {
+        return run(List.of("gh", "api", "-X", "POST", "repos/" + repo + "/issues/" + number + "/comments", "-f", "body=" + body, "--jq", ".html_url"), token);
+    }
+
     /** unqueue: takes a message you queued off, before it's sent. */
     static JsonNode unqueue(JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
@@ -1017,7 +1136,10 @@ public class Sessions implements Callable<Integer> {
             + "the push button at the top of this chat, onto a new branch and draft PR or onto one of my open PRs; if I ask you to "
             + "push, tell me to use that button, and don't give me git push commands. To update one of my PRs, fetch it "
             + "(git fetch origin pull/<n>/head) and leave its change as one commit on the default branch, conflicts resolved; "
-            + "pushing onto that PR then replaces what's on its branch. This clone is yours alone: I can't run commands in it, so "
+            + "pushing onto that PR then replaces what's on its branch (also someone else's PR, when they let maintainers edit it). "
+            + "You have no GitHub access, but you can ask me to close, comment on or merge this repo's issues and PRs: put each on "
+            + "a line of its own, before any Next line, as \"Ask: close #12\", \"Ask: close #12: <closing comment>\", "
+            + "\"Ask: comment #12: <comment>\" or \"Ask: merge #12\". I see each as a button, and decide. This clone is yours alone: I can't run commands in it, so "
             + "do housekeeping in it yourself (like deleting local branches you made that are no longer needed) rather than "
             + "telling me to. It holds only this repo: for another repo's PR, tell me to start a session on that repo (+ new), "
             + "and give me the message to start it with. If there is an obvious next step for me, end your reply with one last line: "
@@ -1083,6 +1205,9 @@ public class Sessions implements Callable<Integer> {
                 switch (status) {
                     case "done" -> {
                         String[] r = suggestion(a.path("output").path("reply").asText(""));
+                        Object[] asked = asks(r[0]);
+                        r[0] = (String) asked[0];
+                        if (!((ArrayNode) asked[1]).isEmpty()) turn.set("asks", (ArrayNode) asked[1]);
                         turn.put("status", "done").put("reply", clip(r[0], MAX_REPLY));
                         if (r[1] != null) turn.put("suggest", r[1]);
                         String session = a.path("session").asText("");

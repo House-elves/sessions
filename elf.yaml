@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.12.0
+version: 0.13.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -25,6 +25,8 @@ writes:
     branch on GitHub (session/<its name>, on the repo, or on your fork when you can't push there), with your gh
     account, and the first push opens a draft PR on the repo. Or, if you pick one of the repo's open PRs instead, they
     replace what's on that PR's branch. The agent itself never has GitHub credentials.
+  - When the agent asks you to close, comment on or merge one of the session's repo's issues or PRs (it has no GitHub
+    access itself), and you click it and confirm in the desk's bar: that, on GitHub, with your gh account.
   - The variables you add in its settings (an API key for what a session builds, say), on this machine only. Every
     session's agent is told their names, and the commands it runs have their values; the agent itself doesn't run
     with them, and the desk only ever shows their names.
@@ -170,6 +172,47 @@ actions:
       to: {pattern: "[0-9a-f]{40}", max: 40}
       status: {kind: int}
       error: {pattern: "[\\s\\S]*", max: 4000, optional: true}
+  # ---- what the agent asks you to do on GitHub, on the session's repo: each waits for your click in the desk's bar ----
+  gh-look:
+    label: Read an issue or PR the agent asks about
+    args: [--action=gh-look]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      number: {kind: int}
+  gh-close:
+    label: Close an issue or PR the agent asks you to
+    args: [--action=gh-close]
+    confirm: "Close {repo}#{number} on GitHub, as {as}? {saying}"
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      repo: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", max: 140}
+      number: {kind: int}
+      as: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}", max: 39}
+      comment: {pattern: "[\\s\\S]{0,2000}", max: 2000, optional: true}
+      # For the bar's words: the elf refuses it unless it's the comment, word for word.
+      saying: {pattern: "[\\s\\S]{1,2100}", max: 2100}
+  gh-comment:
+    label: Comment on an issue or PR as the agent asks
+    args: [--action=gh-comment]
+    confirm: "Comment on {repo}#{number} on GitHub, as {as}: “{comment}”?"
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      repo: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", max: 140}
+      number: {kind: int}
+      as: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}", max: 39}
+      comment: {pattern: "[\\s\\S]{1,2000}", max: 2000}
+  gh-merge:
+    label: Merge a PR the agent asks you to
+    args: [--action=gh-merge]
+    confirm: "Merge {repo}#{number} on GitHub at {short}, as {as}?"
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      repo: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", max: 140}
+      number: {kind: int}
+      as: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}", max: 39}
+      sha: {pattern: "[0-9a-f]{40}", max: 40}
+      short: {pattern: "[0-9a-f]{7}", max: 7}
   # ---- the variables every session has (values written here, never read back by the tab) ----
   vars:
     label: List the session variables' names

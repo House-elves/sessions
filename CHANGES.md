@@ -1,5 +1,11 @@
 # What's new
 
+## 0.13.0
+
+- New: the agent can ask you to close, comment on or merge the repo's issues and PRs (it has no GitHub access). Each
+  shows under its reply: "look" reads it from GitHub, then "close it as you" (or comment, or merge) asks in the desk's
+  bar, with the comment word for word, and does it with your gh account. Done ones are ticked.
+- The agent knows it can push onto someone else's PR when they let maintainers edit it (another PR, by its number).
 ## 0.12.0
 
 - New: break out. "break out" (top right of a Claude Code session) gives you a command, house-elves resume <id>, that

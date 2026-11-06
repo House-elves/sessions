@@ -131,7 +131,7 @@ class SessionsTab extends LitElement {
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
         _files: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
-        _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true },
+        _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true }, _look: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -271,7 +271,10 @@ class SessionsTab extends LitElement {
         /* A push to read before it goes. */
         .t-push { margin: 0 12px; padding: 8px 10px; border: 1px solid var(--t-line); border-radius: 8px; background: var(--t-bg2);
             display: grid; gap: 4px; max-height: 45vh; overflow-y: auto; }
-        .t-push .t-ink { color: var(--t-ink); }
+        .t-push .t-ink, .t-ask .t-ink { color: var(--t-ink); }
+        .t-ask { color: var(--t-warn); }
+        .t-ask > div { display: grid; gap: 3px; }
+        .t-ask .t-row { display: flex; gap: 14px; align-items: baseline; }
         .t-push pre { margin: 0; white-space: pre; overflow-x: auto; font: inherit; font-size: 12.5px; color: var(--t-dim); }
         .t-push pre.t-diff { color: var(--t-ink); max-height: 30vh; overflow-y: auto; }
         .t-push .t-row { display: flex; gap: 14px; align-items: baseline; padding-top: 4px; }
@@ -616,7 +619,7 @@ class SessionsTab extends LitElement {
             </header>
             ${this._goal(s)}
             <div class="t-log" aria-live="polite" @scroll=${e => { this._stick = e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight < 40; }}>
-                ${(s.turns ?? []).map((t, i, all) => html`${this._turn(t, i)}${this._pushes(s, t, all[i + 1])}`)}
+                ${(s.turns ?? []).map((t, i, all) => html`${this._turn(t, i)}${this._asks(s, t)}${this._pushes(s, t, all[i + 1])}`)}
             </div>
             ${this._pushBox(s, busy)}
             ${this._breakoutBox(s)}
@@ -845,6 +848,49 @@ class SessionsTab extends LitElement {
                         typeof t.cost === 'number' ? ` · $${t.cost.toFixed(2)}` : ''}${
                         typeof t.bobcoins === 'number' ? ` · ${t.bobcoins.toFixed(2)} Bobcoins` : ''}${t.model ? ` · ${modelName(t.model)}` : ''}</span>
                     <button class="t-btn" @click=${() => this._toggleLines(t)}>${shown ? 'hide steps' : 'show steps'}</button></div>`}`;
+    }
+
+    /**
+     * What the agent asked you to do on GitHub (it can't): a button each. Clicking reads it from GitHub, so you see what
+     * it is; then "close it" (or comment, or merge) asks in the desk's bar, as your gh account.
+     */
+    _asks(s, t) {
+        if (!this._github || t.status !== 'done' || !t.asks?.length) return nothing;
+        const verb = { close: 'close', comment: 'comment on', merge: 'merge' };
+        return html`${t.asks.map((a, k) => {
+            const id = `${t.agent}:${k}`;
+            const look = this._look?.id === id ? this._look : null;
+            if (a.done) {
+                return html`<div class="t-line t-green"><span class="t-dot">✓</span><span>${a.done[0].toUpperCase() + a.done.slice(1)} #${a.number}
+                    <span class="t-dim">· ${ago(a.at)}</span></span></div>`;
+            }
+            return html`<div class="t-line t-ask"><span class="t-dot">?</span><div>
+                <span>It asks you to <b>${verb[a.kind]} #${a.number}</b>${a.text ? html`, saying: <span class="t-ink">“${a.text}”</span>` : ''}</span>
+                ${look ? html`<div class="t-dim">#${a.number} <span class="t-ink">${look.title}</span> · ${look.pr ? 'PR' : 'issue'} by ${look.author} · ${
+                        look.merged ? 'merged' : look.state}${look.draft ? ' · draft' : ''}${look.pr && look.state === 'open' && look.mergeable_state ? ` · ${look.mergeable_state}` : ''}
+                    · <a href=${look.url} target="_blank" rel="noopener">on GitHub</a></div>
+                    <div class="t-row">${look.state === 'open' || a.kind === 'comment'
+                        ? html`<button class="t-btn t-acc" ?disabled=${!!this._busy} @click=${() => this._ghDo(s, t, a, look)}>${verb[a.kind]} it as ${look.as}</button>`
+                        : html`<span class="t-dim">It's ${look.merged ? 'merged' : 'closed'} already.</span>`}
+                        <button class="t-btn" @click=${() => { this._look = null; }}>not now</button></div>`
+                    : html` <button class="t-btn" ?disabled=${!!this._busy} @click=${() => this._ghLook(s, id, a)}>${this._busy === 'gh-look' && this._lookingAt === id ? 'reading…' : 'look'}</button>`}
+            </div></div>`;
+        })}`;
+    }
+
+    async _ghLook(s, id, a) {
+        this._lookingAt = id;
+        const r = await this._act('gh-look', { session: s.id, number: a.number }, `Couldn't read #${a.number}`);
+        this._look = r ? { ...r, id } : null;
+    }
+
+    async _ghDo(s, t, a, look) {
+        const base = { session: s.id, repo: look.repo, number: a.number, as: look.as };
+        const values = a.kind === 'close' ? { ...base, ...(a.text ? { comment: a.text } : {}), saying: a.text ? `With the comment: \u201c${a.text.trim()}\u201d` : 'No comment.' }
+            : a.kind === 'comment' ? { ...base, comment: a.text }
+            : { ...base, sha: look.sha, short: look.sha.slice(0, 7) };
+        const r = await this._act(`gh-${a.kind}`, values, `Couldn't ${a.kind} #${a.number}`);
+        if (r?.done) this._look = null;
     }
 
     /** The pushes made after this turn (and before the next): where they went, or why they didn't. */
