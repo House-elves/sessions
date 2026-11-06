@@ -1003,7 +1003,12 @@ public class Sessions implements Callable<Integer> {
     static final String SUGGEST_RULE = "\n\n<desk-note>You can't push or open PRs from here: when work is ready, commit it in "
             + "this clone (as one commit on the default branch, with no Co-Authored-By or other attribution lines). I push it with "
             + "the push button at the top of this chat, onto a new branch and draft PR or onto one of my open PRs; if I ask you to "
-            + "push, tell me to use that button, and don't give me git push commands. If there is an obvious next step for me, end your reply with one last line: "
+            + "push, tell me to use that button, and don't give me git push commands. To update one of my PRs, fetch it "
+            + "(git fetch origin pull/<n>/head) and leave its change as one commit on the default branch, conflicts resolved; "
+            + "pushing onto that PR then replaces what's on its branch. This clone is yours alone: I can't run commands in it, so "
+            + "do housekeeping in it yourself (like deleting local branches you made that are no longer needed) rather than "
+            + "telling me to. It holds only this repo: for another repo's PR, tell me to start a session on that repo (+ new), "
+            + "and give me the message to start it with. If there is an obvious next step for me, end your reply with one last line: "
             + "\"Next: \" and the message I would most likely send you next, in my own words, under 100 characters "
             + "(like \"Yes, go ahead\" or \"Run the tests\"). Leave the line out when there isn't one. My chat shows it as a "
             + "suggestion I can take, not as part of your answer.</desk-note>";
