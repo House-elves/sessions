@@ -278,8 +278,8 @@ class SessionsTab extends LitElement {
         .term button.t-acc { color: var(--t-acc); font-weight: 600; }
         .t-push .t-sel { font: inherit; font-size: 13px; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
             border-radius: 6px; padding: 2px 6px; max-width: min(36rem, 100%); }
-        .t-push .t-cmd { font: inherit; flex: 1; min-width: 0; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
-            border-radius: 6px; padding: 3px 8px; }
+        .term .t-push input.t-cmd { font: inherit; flex: 1; min-width: 0; height: auto; color: var(--t-ink); background: var(--t-bg);
+            border: 1px solid var(--t-line); border-radius: 6px; padding: 3px 8px; box-shadow: none; }
         .t-push .t-inline { display: inline-flex; gap: 6px; align-items: baseline; }
         .t-push .t-num { font: inherit; width: 6em; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
             border-radius: 6px; padding: 2px 6px; }
