@@ -131,7 +131,7 @@ class SessionsTab extends LitElement {
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
         _files: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
-        _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true },
+        _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -278,6 +278,8 @@ class SessionsTab extends LitElement {
         .term button.t-acc { color: var(--t-acc); font-weight: 600; }
         .t-push .t-sel { font: inherit; font-size: 13px; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
             border-radius: 6px; padding: 2px 6px; max-width: min(36rem, 100%); }
+        .t-push .t-cmd { font: inherit; flex: 1; min-width: 0; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
+            border-radius: 6px; padding: 3px 8px; }
         .t-push .t-inline { display: inline-flex; gap: 6px; align-items: baseline; }
         .t-push .t-num { font: inherit; width: 6em; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
             border-radius: 6px; padding: 2px 6px; }
@@ -598,6 +600,10 @@ class SessionsTab extends LitElement {
                     ${s.pr ? html`<a href=${s.pr} target="_blank" rel="noopener" title=${s.branch ? `Branch ${s.branch}` : ''}>PR</a>` : nothing}
                     ${this._github ? html`<button class="t-btn" ?disabled=${busy || !!this._busy} title=${busy ? 'When this turn is done' : 'Read the commits, then push them to GitHub'}
                         @click=${() => this._pushPreview(s)}>${this._busy === 'push-preview' ? 'reading…' : 'push'}</button>` : nothing}
+                    ${s.terminal ? html`<span class="t-warn" title="house-elves resume: the desk waits until you exit Claude Code there">in a terminal</span>`
+                        : (s.agent ?? 'claude') === 'claude' && s.session ? html`<button class="t-btn" ?disabled=${busy}
+                        title=${busy ? 'When this turn is done' : 'Carry on in Claude Code in a terminal'}
+                        @click=${() => { this._breakout = this._breakout === s.id ? null : s.id; }}>break out</button>` : nothing}
                     ${this._editing ? nothing : html`<button class="t-btn" @click=${() => { this._editing = 'name'; }}>rename</button>`}
                     <button class="t-btn" @click=${() => this._act('archive', { session: s.id, archived: !s.archived }, 'Couldn\'t archive it')}>
                         ${s.archived ? 'unarchive' : 'archive'}</button>
@@ -613,7 +619,32 @@ class SessionsTab extends LitElement {
                 ${(s.turns ?? []).map((t, i, all) => html`${this._turn(t, i)}${this._pushes(s, t, all[i + 1])}`)}
             </div>
             ${this._pushBox(s, busy)}
+            ${this._breakoutBox(s)}
             ${this._compose(s, busy)}
+        </div>`;
+    }
+
+    /** The command that carries this session on in Claude Code in a terminal, to copy. */
+    _breakoutBox(s) {
+        if (this._breakout !== s.id || s.terminal) return nothing;
+        const cmd = `house-elves resume ${s.id}`;
+        const copy = async () => {
+            try {
+                await navigator.clipboard.writeText(cmd);
+                this._copied = true;
+            } catch {
+                this.renderRoot.querySelector('.t-cmd')?.focus();
+                this._copied = false;
+            }
+        };
+        return html`<div class="t-push">
+            <div><b>Break out</b> <span class="t-dim">carry this session on in Claude Code in a terminal on this machine:</span></div>
+            <div class="t-row"><input class="t-cmd" readonly .value=${cmd} aria-label="The command to run" @focus=${e => e.target.select()}>
+                <button class="t-btn t-acc" @click=${copy}>${this._copied ? 'copied' : 'copy'}</button></div>
+            <div class="t-dim">It opens in the session's own clone with the whole conversation, as your Claude Code: your login and settings,
+                outside the runner's sandbox. The desk waits while it's open; exit Claude Code and the next message here carries on
+                from what you did there. Commit there for push.</div>
+            <div class="t-row"><button class="t-btn" @click=${() => { this._breakout = null; this._copied = false; }}>close</button></div>
         </div>`;
     }
 

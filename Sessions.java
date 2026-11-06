@@ -936,6 +936,9 @@ public class Sessions implements Callable<Integer> {
             throw new IllegalStateException("Session variables need runner 0.53.0 or later: update the desk, or remove them in Sessions' settings");
         }
         harvest(s);
+        if (inTerminal(s)) {
+            throw new IllegalStateException("It's open in a terminal (house-elves resume): exit Claude Code there, then send it from here");
+        }
         ArrayNode turns = (ArrayNode) s.path("turns");
         for (JsonNode t : turns) {
             if (t.path("status").asText().equals("running")) throw new IllegalStateException("It's still working on your last message");
@@ -984,6 +987,15 @@ public class Sessions implements Callable<Integer> {
         ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText());
         out.set("agent", agent);
         return out;
+    }
+
+    /**
+     * Open in Claude Code in a terminal (house-elves resume <id>, which marks it, and unmarks it when you exit): the
+     * desk's agent waits, so the two don't work in its clone at once. A mark whose terminal is gone counts for nothing.
+     */
+    static boolean inTerminal(JsonNode s) {
+        long pid = s.path("terminal").path("pid").asLong(0);
+        return pid > 0 && ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
     }
 
     /** The runner that started this action is at least major.minor (it says in ELF_RUNNER_VERSION); run by hand, yes. */

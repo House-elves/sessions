@@ -1,5 +1,11 @@
 # What's new
 
+## 0.12.0
+
+- New: break out. "break out" (top right of a Claude Code session) gives you a command, house-elves resume <id>, that
+  carries the session on in Claude Code in a terminal: in its own clone, with the whole conversation, as your own
+  Claude Code. While it's open the session says "in a terminal" and the desk waits; exit Claude Code and your next
+  message here carries on from what you did there.
 ## 0.11.3
 
 - The agent tidies its own clone (like deleting a local branch it no longer needs) instead of telling you to run git
