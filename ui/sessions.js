@@ -308,8 +308,8 @@ class SessionsTab extends LitElement {
         .t-you { display: flex; gap: 8px; margin-top: 12px; padding: 6px 10px; background: var(--t-bg2); border-radius: 6px; }
         .t-you:first-child { margin-top: 0; }
         .t-you-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-        .t-said { display: flex; gap: 8px; color: var(--t-ink); }
-        .t-said .t-you-text { flex: 1; }
+        .t-midturn { display: flex; gap: 8px; color: var(--t-ink); }
+        .t-midturn .t-you-text { flex: 1; }
         .t-said-note { color: var(--t-dim); font-size: .9em; white-space: nowrap; }
         .t-prompt { color: var(--t-dim); user-select: none; }
         .t-line { display: flex; gap: 8px; align-items: baseline; }
@@ -902,7 +902,7 @@ class SessionsTab extends LitElement {
                     ? html`<a class="t-file" href=${elf.imageUrl('attachments', f.file)} target="_blank" rel="noopener">[Image #${k + 1}]<img alt=${f.name} src=${elf.imageUrl('attachments', f.file)}></a>`
                     : html`<span class="t-file">[${f.name}]</span>`)}</div>` : nothing}
             </div></div>
-            ${(t.said ?? []).map(m => html`<div class="t-you t-said"><span class="t-prompt">&gt;</span><div class="t-you-text">${m.text}</div>
+            ${(t.said ?? []).map(m => html`<div class="t-you t-midturn"><span class="t-prompt">&gt;</span><div class="t-you-text">${m.text}</div>
                 <span class="t-said-note">sent while it worked</span></div>`)}
             ${t.status === 'running' ? html`
                 ${(live?.lines ?? []).slice(-60).map(l => this._line(l))}

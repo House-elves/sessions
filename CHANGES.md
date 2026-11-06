@@ -1,5 +1,9 @@
 # What's new
 
+## 0.16.1
+
+- What you said while it worked shows in its own style, not as one of its steps.
+
 ## 0.16.0
 
 - New: send a message while it works, as in Claude Code. Enter sends it at once and the agent reads it at its next
