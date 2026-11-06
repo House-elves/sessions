@@ -1,5 +1,11 @@
 # What's new
 
+## 0.11.3
+
+- The agent tidies its own clone (like deleting a local branch it no longer needs) instead of telling you to run git
+  commands there, since only it can. To update one of your PRs it fetches it and leaves the change as one commit on
+  the default branch, for push onto that PR. For a PR on another repo, it tells you to start a session there, with
+  the message to start it with.
 ## 0.11.2
 
 - Each push shows in the chat, where it happened: ✓ where it went and its PR, or ✗ why GitHub refused it, in words
