@@ -26,7 +26,7 @@ writes:
     account, and the first push opens a draft PR on the repo. Or, if you pick one of the repo's open PRs instead, they
     replace what's on that PR's branch. The agent itself never has GitHub credentials.
   - When the agent asks you to close, comment on or merge one of the session's repo's issues or PRs (it has no GitHub
-    access itself), and you click it and confirm in the desk's bar: that, on GitHub, with your gh account.
+    access itself), and you click it and confirm in the desk's bar, it does that on GitHub with your gh account.
   - The variables you add in its settings (an API key for what a session builds, say), on this machine only. Every
     session's agent is told their names, and the commands it runs have their values; the agent itself doesn't run
     with them, and the desk only ever shows their names.
