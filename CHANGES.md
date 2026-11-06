@@ -1,5 +1,10 @@
 # What's new
 
+## 0.15.0
+
+- New: files the agent names download on a click. A path to a file in the session's clone, like the video it made
+  (…/sessions_<id>/target/cast/demo.mp4, or `target/cast/demo.mp4` in code), is a link in its reply: click it and
+  your browser saves the file. The agent knows it can hand you files this way. Needs Elf Desk 0.6.42 and runner 0.54.0.
 ## 0.14.0
 
 - New: voice input. 🎤 in the message box: the desk listens and your words go into the box as you speak, for you to

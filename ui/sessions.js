@@ -124,6 +124,60 @@ const suggestion = (s, busy) => {
 const settingsTags = values => [...new Set((values?.TAGS ?? '').split(',').map(t => t.trim()).filter(Boolean))];
 const tagged = (s, tag) => !tag || (s.tags ?? []).includes(tag);
 
+
+/** 6.5 MB, 820 KB */
+function size(n) {
+    return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+// A full path into the session's clone (…/worktrees/slots/<owner_repo>/sessions_<id>/…), as the agent says where a file
+// is; and in `code`, a path of the clone's own (control-plane/target/x.mp4).
+const PATH_CHARS = '[^\\s`\'"<>()\\[\\]{}|]';
+const RELATIVE = /^(?:\.\/)?[\w.@+-]+(?:\/[\w.@+-]+)*\.[A-Za-z0-9]{1,10}$/;
+
+function linkFiles(root, id) {
+    const full = new RegExp(`/${PATH_CHARS}*/sessions_${id}/${PATH_CHARS}+`, 'g');
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const texts = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (!n.parentElement.closest('a')) texts.push(n);
+    }
+    for (const t of texts) {
+        const text = t.nodeValue;
+        full.lastIndex = 0;
+        const parts = [];
+        let at = 0;
+        for (let m = full.exec(text); m; m = full.exec(text)) {
+            const path = m[0].replace(/[.,;:!?]+$/, '');
+            if (path.endsWith('/')) continue;
+            parts.push(text.slice(at, m.index), link(root, path));
+            at = m.index + path.length;
+            full.lastIndex = at;
+        }
+        if (parts.length) {
+            parts.push(text.slice(at));
+            t.replaceWith(...parts.filter(p => p !== ''));
+            continue;
+        }
+        // A path of the clone's own, alone in `code`: Wrote it to `target/cast/demo.mp4`.
+        const code = t.parentElement;
+        if (code.tagName === 'CODE' && code.parentElement?.tagName !== 'PRE' && code.childNodes.length === 1
+                && text.includes('/') && RELATIVE.test(text.trim()) && !text.includes('..')) {
+            t.replaceWith(link(root, text.trim(), text));
+        }
+    }
+}
+
+function link(root, path, shown = path) {
+    const a = root.ownerDocument.createElement('a');
+    a.className = 't-dl';
+    a.href = '#';
+    a.dataset.path = path;
+    a.title = `Download ${path.split('/').pop()}`;
+    a.textContent = shown;
+    return a;
+}
+
 class SessionsTab extends LitElement {
     static properties = {
         _sessions: { state: true }, _route: { state: true }, _error: { state: true }, _live: { state: true },
@@ -293,6 +347,10 @@ class SessionsTab extends LitElement {
             color: var(--t-acc); font-size: 15px; text-align: center; }
         .t-file { color: var(--t-acc); position: relative; text-decoration: none; }
         .t-file.failed { color: var(--t-red); }
+        .t-reply a.t-dl { color: var(--t-acc); text-decoration: underline dotted; text-underline-offset: 3px; cursor: pointer; }
+        .t-reply a.t-dl:hover { text-decoration-style: solid; }
+        .t-reply a.t-dl.busy { color: var(--t-dim); cursor: progress; }
+        .t-reply a.t-dl.failed { color: var(--t-red); }
         .t-file.sending { color: var(--t-dim); }
         .t-file img { display: none; position: absolute; left: 0; bottom: 1.6em; max-width: 280px; max-height: 200px;
             border: 1px solid var(--t-line); border-radius: 6px; background: #fff; z-index: 2; }
@@ -1122,7 +1180,55 @@ class SessionsTab extends LitElement {
         this._files = [...this._files];
     }
 
+    firstUpdated() {
+        // A file the agent named in its reply downloads on a click (elf.download): the desk fetches it from the
+        // session's clone and your browser saves it.
+        this.renderRoot.addEventListener('click', e => {
+            const a = e.target.closest?.('a.t-dl');
+            if (!a) return;
+            e.preventDefault();
+            this._download(a);
+        });
+    }
+
+    async _download(a) {
+        const s = this._current;
+        if (!s || a.classList.contains('busy')) return;
+        if (typeof elf.download !== 'function') {
+            a.classList.add('failed');
+            a.title = 'Downloading needs a newer Elf Desk: update it in Settings';
+            return;
+        }
+        a.classList.remove('failed');
+        a.classList.add('busy');
+        a.title = 'Getting it from the session\'s clone…';
+        try {
+            const r = await elf.download(s.repo, s.id, a.dataset.path);
+            a.title = `Downloaded ${r?.name ?? ''}${r?.size != null ? ` (${size(r.size)})` : ''}`;
+        } catch (err) {
+            if (!err.cancelled) {
+                a.classList.add('failed');
+                a.title = err.message;
+                this._error = err.message;
+            }
+        } finally {
+            a.classList.remove('busy');
+        }
+    }
+
+    /** The paths in the agent's replies that are files in this session's clone, as links that download them. */
+    _fileLinks() {
+        const s = this._current;
+        if (!s?.id) return;
+        for (const md of this.renderRoot.querySelectorAll('.t-reply .md')) {
+            if (md._linked === md.innerHTML) continue;
+            linkFiles(md, s.id);
+            md._linked = md.innerHTML;
+        }
+    }
+
     async updated(changed) {
+        this._fileLinks();
         // The open session fills the desk's window; the list and the New session form grow with their content.
         const filling = !!this._current && !(this._route ?? '').startsWith('new');
         if (filling !== this._filling) {
