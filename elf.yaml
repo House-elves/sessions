@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.15.1
+version: 0.16.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -132,6 +132,23 @@ actions:
     params:
       session: {pattern: "s[0-9]{10,16}"}
       n: {pattern: "[0-9]", max: 1}
+  say:
+    label: Send a message while it works
+    args: [--action=say]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      text: {pattern: "[\\s\\S]{0,20000}", optional: true, max: 20000}
+      n: {pattern: "[0-9]?", optional: true, max: 1}
+  said:
+    label: Keep a message it took while it worked
+    args: [--action=said]
+    ask: false
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      agent: {pattern: "[a-z0-9-]{1,80}", max: 80}
+      text: {pattern: "[\\s\\S]{1,20000}", max: 20000}
+      n: {pattern: "[0-9]?", optional: true, max: 1}
   # ---- pushing a session's work: the preview reads it, the push waits for your click in the desk's bar ----
   push-preview:
     label: Show what a push would send

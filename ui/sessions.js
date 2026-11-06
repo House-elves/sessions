@@ -185,7 +185,7 @@ class SessionsTab extends LitElement {
         _busy: { state: true }, _goalOpen: { state: true }, _editing: { state: true }, _archived: { state: true },
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
-        _files: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
+        _files: { state: true }, _sayMode: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
         _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true }, _look: { state: true }, _listening: { state: true },
     };
 
@@ -308,6 +308,9 @@ class SessionsTab extends LitElement {
         .t-you { display: flex; gap: 8px; margin-top: 12px; padding: 6px 10px; background: var(--t-bg2); border-radius: 6px; }
         .t-you:first-child { margin-top: 0; }
         .t-you-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+        .t-said { display: flex; gap: 8px; color: var(--t-ink); }
+        .t-said .t-you-text { flex: 1; }
+        .t-said-note { color: var(--t-dim); font-size: .9em; white-space: nowrap; }
         .t-prompt { color: var(--t-dim); user-select: none; }
         .t-line { display: flex; gap: 8px; align-items: baseline; }
         .t-line > :last-child { min-width: 0; overflow-wrap: anywhere; }
@@ -393,6 +396,9 @@ class SessionsTab extends LitElement {
     connectedCallback() {
         super.connectedCallback();
         this._load();
+        // While it works, Enter sends your message at once (it reads it at its next step) or queues it for after.
+        this._sayMode = 'now';
+        elf.store.get('say-mode').then(v => { if (v === 'queue') this._sayMode = 'queue'; }).catch(() => {});
         // Pushing a session's work comes with the GitHub elf: offered only when it's on the desk. (An older desk has no hasElf.)
         (typeof elf.hasElf === 'function' ? elf.hasElf('github') : Promise.resolve(false))
             .then(v => { this._github = !!v; }).catch(() => { this._github = false; });
@@ -896,6 +902,8 @@ class SessionsTab extends LitElement {
                     ? html`<a class="t-file" href=${elf.imageUrl('attachments', f.file)} target="_blank" rel="noopener">[Image #${k + 1}]<img alt=${f.name} src=${elf.imageUrl('attachments', f.file)}></a>`
                     : html`<span class="t-file">[${f.name}]</span>`)}</div>` : nothing}
             </div></div>
+            ${(t.said ?? []).map(m => html`<div class="t-you t-said"><span class="t-prompt">&gt;</span><div class="t-you-text">${m.text}</div>
+                <span class="t-said-note">sent while it worked</span></div>`)}
             ${t.status === 'running' ? html`
                 ${(live?.lines ?? []).slice(-60).map(l => this._line(l))}
                 <div class="t-working"><span class="t-spin">✻</span> ${live?.status === 'queued' ? 'Waiting for the runner…'
@@ -987,6 +995,8 @@ class SessionsTab extends LitElement {
         return html`<div class="t-input">
             ${queue.length ? html`<div class="t-queue">${queue.map((m, k) => html`<div><span>&gt;</span>
                 <span class="t-qtext">${m.text || ''}${m.files ? ` [${m.files.split(',').length} file${m.files.includes(',') ? 's' : ''}]` : ''}</span>
+                ${busy && this._canSay(s) && !m.files ? html`<button class="t-btn" title="It reads it at its next step, without waiting for the turn to end"
+                    @click=${() => this._say(s, null, k)}>send now</button>` : nothing}
                 <button class="t-btn" title="Take it off" @click=${() => this._act('unqueue', { session: s.id, n: String(k) }, 'Couldn\'t take it off')}>×</button></div>`)}
                 <div><span>${busy ? 'queued: sent when it finishes' : 'not sent yet: it goes with your next message'}${busy ? '' : html` · <button class="t-btn" @click=${() => this._send(s, this.renderRoot.querySelector('.t-area'))}>send now</button>`}</span></div>
             </div>` : nothing}
@@ -995,7 +1005,8 @@ class SessionsTab extends LitElement {
                 <button class="t-btn" title="Take it off" @click=${() => { this._files = files.filter(x => x !== f); }}>×</button></span>`)}</div>` : nothing}
             <div class="t-box ${busy ? 'busy' : ''}"><span class="t-prompt">&gt;</span>
                 <textarea class="t-area" name="text" rows="1" aria-label="Your message" maxlength="20000" spellcheck="false"
-                    placeholder=${busy ? 'Working… type your next message: enter queues it, esc interrupts' : hint ? `${hint}   (tab to use it)` : 'Type a message: enter to send'}
+                    placeholder=${busy ? (this._sayNow(s) ? 'Working… type a message: enter sends it now (it reads it at its next step), esc interrupts'
+                        : 'Working… type your next message: enter queues it, esc interrupts') : hint ? `${hint}   (tab to use it)` : 'Type a message: enter to send'}
                     @input=${e => { this._grow(e.target); elf.store.set(`draft:${s.id}`, e.target.value).catch(() => {}); }}
                     @keydown=${e => this._key(e, s, busy)} @paste=${e => this._paste(e, s)}></textarea>
                 ${typeof elf.listen === 'function' ? html`<button class="t-btn t-mic ${this._listening ? 'on' : ''}" aria-pressed=${!!this._listening}
@@ -1005,6 +1016,8 @@ class SessionsTab extends LitElement {
             <div class="t-foot">
                 <span>enter to send · ctrl+enter new line ·${suggestion(s, busy) ? ' tab takes the suggestion ·' : ''} paste or drag in images, PDFs, Word and text files ·
                     <button class="t-btn" @click=${() => this.renderRoot.querySelector('.t-pick')?.click()}>attach</button>
+                    ${busy && this._canSay(s) ? html` · while it works, enter <button class="t-btn" title="Switch: send at once, or queue for when it finishes"
+                        @click=${() => this._switchSay()}>${this._sayMode === 'queue' ? 'queues it' : 'sends it now'}</button>` : nothing}
                     ${busy ? html` · <button class="t-btn" @click=${() => this._stop(s)}>esc to interrupt</button>` : nothing}</span>
                 <span class="t-grow"></span>
                 <span>${n.model ? modelName(n.model) : agentName(s.agent)}${n.context !== null ? html` · <span class=${n.context >= 80 ? 't-warn' : ''}>${100 - n.context}% context left</span>` : ''}</span>
@@ -1071,8 +1084,56 @@ class SessionsTab extends LitElement {
             return;
         }
         e.preventDefault();
-        // While it works, the message is queued and goes when the turn ends, as in Claude Code.
-        this._send(s, e.target);
+        // While it works, the message goes at once (it reads it at its next step, as in Claude Code), or is queued
+        // for when the turn ends: as you switched it. Files and IBM Bob always wait for the turn to end.
+        if (busy && this._sayNow(s) && !(this._files ?? []).length && e.target.value.trim()) this._say(s, e.target);
+        else this._send(s, e.target);
+    }
+
+    /** Whether it can read a message mid-turn: Claude Code (not IBM Bob). */
+    _canSay(s) {
+        return (s.agent ?? 'claude') !== 'bob';
+    }
+
+    _sayNow(s) {
+        return this._sayMode !== 'queue' && this._canSay(s);
+    }
+
+    _switchSay() {
+        this._sayMode = this._sayMode === 'queue' ? 'now' : 'queue';
+        elf.store.set('say-mode', this._sayMode).catch(() => {});
+        this.renderRoot.querySelector('.t-area')?.focus();
+    }
+
+    /**
+     * Sends a message to the working agent at once (box), or one you queued (n): the runner hands it to Claude Code,
+     * which reads it at its next step. If the turn ended first, a typed one goes the usual way (as the next turn).
+     */
+    async _say(s, box, n = null) {
+        const t = (s.turns ?? []).find(x => x.status === 'running');
+        if (!t) return box ? this._send(s, box) : undefined;
+        const text = box ? box.value.trim() : (s.queued?.[n]?.text ?? '').trim();
+        let r;
+        try {
+            r = await elf.act('say', { session: s.id, text, n: n == null ? '' : String(n) });
+        } catch (e) {
+            // It can't take it now (an older runner, say): a typed one is queued instead, as before.
+            if (box) return this._send(s, box);
+            this._error = `Couldn't send it now: ${e.message}`;
+            return;
+        }
+        if (r.say?.said) {
+            await this._act('said', { session: s.id, agent: t.agent, text, n: n == null ? '' : String(n) }, 'It got it, but it didn\'t show');
+            if (box) {
+                box.value = '';
+                this._grow(box);
+                elf.store.set(`draft:${s.id}`, '').catch(() => {});
+            }
+            this._stick = true;
+        } else if (box) {
+            // It had just answered: then it's simply your next message.
+            await this._send(s, box);
+        }
     }
 
     /** The prompt grows with what you type, up to a third of the window; the log keeps the rest. */

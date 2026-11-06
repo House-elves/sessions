@@ -1,5 +1,12 @@
 # What's new
 
+## 0.16.0
+
+- New: send a message while it works, as in Claude Code. Enter sends it at once and the agent reads it at its next
+  step, so you can steer it without waiting or interrupting. Prefer it to wait? Switch "while it works, enter sends it
+  now" to "queues it" (under the box; it's remembered), and a queued message has its own "send now". Messages with
+  files, and IBM Bob sessions, still go when the turn ends. Needs runner 0.55.0.
+
 ## 0.15.1
 
 - Only paths to files become links, not folders.

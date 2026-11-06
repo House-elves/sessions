@@ -129,6 +129,8 @@ public class Sessions implements Callable<Integer> {
                 case "send" -> send(in);
                 case "agent-done" -> agentDone(in);
                 case "unqueue" -> unqueue(in);
+                case "say" -> say(in);
+                case "said" -> said(in);
                 case "push-preview" -> pushPreview(config, in);
                 case "push" -> push(config, in, false);
                 case "push-pr" -> push(config, in, true);
@@ -1027,6 +1029,60 @@ public class Sessions implements Callable<Integer> {
 
     static String post(String repo, int number, String body, String token) throws Exception {
         return run(List.of("gh", "api", "-X", "POST", "repos/" + repo + "/issues/" + number + "/comments", "-f", "body=" + body, "--jq", ".html_url"), token);
+    }
+
+    /** The turn the agent is working on, or null. */
+    static ObjectNode workingTurn(JsonNode s) {
+        for (JsonNode t : s.path("turns")) {
+            if (t.path("status").asText().equals("running")) return (ObjectNode) t;
+        }
+        return null;
+    }
+
+    /**
+     * say: a message for the agent while it works, read at its next step (as in Claude Code), not after its turn: this
+     * text, or a message you queued (n). Answers {say: {agent, text}}, which the runner (0.55.0) answers in its place
+     * with {said} or {said: false, why}; said records it in the turn. Claude Code only, and text only.
+     */
+    static JsonNode say(JsonNode in) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        harvest(s);
+        ObjectNode t = workingTurn(s);
+        if (t == null) throw new IllegalStateException("It isn't working: send it as your next message");
+        if (s.path("agent").asText("claude").equals("bob")) throw new IllegalStateException("IBM Bob only reads messages between turns: queue it");
+        if (!runnerAtLeast(0, 55)) throw new IllegalStateException("Sending while it works needs runner 0.55.0 or later: queue it, or update the desk");
+        String text = in.path("text").asText("").strip();
+        if (in.hasNonNull("n") && !in.path("n").asText("").isEmpty()) {
+            ArrayNode q = s.withArray("queued");
+            int n = in.path("n").asInt(-1);
+            if (n < 0 || n >= q.size()) throw new IllegalArgumentException("It isn't queued any more");
+            if (!q.get(n).path("files").asText("").isEmpty()) throw new IllegalStateException("A message with files goes when the turn ends");
+            text = q.get(n).path("text").asText("").strip();
+        }
+        if (text.isEmpty() || text.length() > MAX_TEXT) throw new IllegalArgumentException("Write a message");
+        ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText());
+        out.putObject("say").put("agent", t.path("agent").asText()).put("text", text);
+        return out;
+    }
+
+    /** said: the runner took what you said: it shows in the turn, and a queued one (n) comes off the queue. */
+    static JsonNode said(JsonNode in) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        String text = in.path("text").asText("").strip();
+        if (text.isEmpty() || text.length() > MAX_TEXT) throw new IllegalArgumentException("Write a message");
+        ObjectNode t = null;
+        for (JsonNode x : s.path("turns")) {
+            if (x.path("agent").asText().equals(in.path("agent").asText("-"))) t = (ObjectNode) x;
+        }
+        if (t == null) throw new IllegalArgumentException("Not one of its turns");
+        ArrayNode said = t.withArray("said");
+        if (said.size() < 50) said.addObject().put("text", text).put("at", Instant.now().toString());
+        ArrayNode q = s.withArray("queued");
+        int n = in.path("n").asInt(-1);
+        if (n >= 0 && n < q.size() && q.get(n).path("text").asText("").strip().equals(text)) q.remove(n);
+        if (q.isEmpty()) s.remove("queued");
+        save(s);
+        return JSON.createObjectNode().put("session", s.path("id").asText());
     }
 
     /** unqueue: takes a message you queued off, before it's sent. */
