@@ -131,7 +131,7 @@ class SessionsTab extends LitElement {
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
         _files: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
-        _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true }, _look: { state: true },
+        _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true }, _look: { state: true }, _listening: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -302,6 +302,10 @@ class SessionsTab extends LitElement {
         .t-queue { display: grid; gap: 2px; color: var(--t-dim); }
         .t-queue div { display: flex; gap: 8px; align-items: baseline; }
         .t-queue .t-qtext { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--t-ink); opacity: .75; flex: 1; }
+        .t-mic { align-self: center; font-size: 15px; line-height: 1; padding: 2px 6px; text-decoration: none; }
+        .t-mic.on { color: var(--t-red); animation: t-blink 1.2s ease-in-out infinite; }
+        @keyframes t-blink { 50% { opacity: 0.4; } }
+        @media (prefers-reduced-motion: reduce) { .t-mic.on { animation: none; } }
         .t-box { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--t-line); border-radius: 8px; padding: 6px 10px; }
         .t-box:focus-within { border-color: var(--t-dim); }
         .t-box.busy { border-style: dashed; }
@@ -935,6 +939,9 @@ class SessionsTab extends LitElement {
                     placeholder=${busy ? 'Working… type your next message: enter queues it, esc interrupts' : hint ? `${hint}   (tab to use it)` : 'Type a message: enter to send'}
                     @input=${e => { this._grow(e.target); elf.store.set(`draft:${s.id}`, e.target.value).catch(() => {}); }}
                     @keydown=${e => this._key(e, s, busy)} @paste=${e => this._paste(e, s)}></textarea>
+                ${typeof elf.listen === 'function' ? html`<button class="t-btn t-mic ${this._listening ? 'on' : ''}" aria-pressed=${!!this._listening}
+                    title=${this._listening ? 'Stop listening' : 'Speak your message (the desk listens; it goes in the box, for you to send)'}
+                    aria-label=${this._listening ? 'Stop listening' : 'Speak your message'} @click=${() => this._voice(s)}>${this._listening ? '■' : '🎤'}</button>` : nothing}
             </div>
             <div class="t-foot">
                 <span>enter to send · ctrl+enter new line ·${suggestion(s, busy) ? ' tab takes the suggestion ·' : ''} paste or drag in images, PDFs, Word and text files ·
@@ -945,6 +952,35 @@ class SessionsTab extends LitElement {
                 <input class="t-pick" type="file" multiple hidden @change=${e => { this._addFiles([...e.target.files], s); e.target.value = ''; }}>
             </div>
         </div>`;
+    }
+
+    /**
+     * Voice: the desk listens (with the browser's speech recognition, or Whisper on its machine, as you chose there)
+     * and the words go into the message box as they come, for you to read and send. Clicked again, it stops.
+     */
+    async _voice(s) {
+        if (this._listening) {
+            this._listening.stop?.();
+            return;
+        }
+        const box = this.renderRoot.querySelector('.t-area');
+        this._listening = { stop: null };
+        try {
+            const l = await elf.listen(t => {
+                if (t.final && box.isConnected) {
+                    box.value = box.value && !/\s$/.test(box.value) ? `${box.value} ${t.final}` : box.value + t.final;
+                    this._grow(box);
+                    elf.store.set(`draft:${s.id}`, box.value).catch(() => {});
+                }
+                if (t.error) this._error = `Voice: ${t.error}`;
+                if (t.done) this._listening = null;
+            });
+            if (this._listening) this._listening = l;
+            box.focus();
+        } catch (e) {
+            this._listening = null;
+            this._error = `Voice: ${e.message}`;
+        }
     }
 
     /** Enter sends; Ctrl+Enter, Shift+Enter or Alt+Enter is a new line; Esc stops a working turn. */

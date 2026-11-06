@@ -1,5 +1,10 @@
 # What's new
 
+## 0.14.0
+
+- New: voice input. 🎤 in the message box: the desk listens and your words go into the box as you speak, for you to
+  read and send. It uses your browser's speech recognition, or Whisper on the desk's machine (your audio stays there),
+  as you choose on the desk's listening bar. Needs Elf Desk 0.6.41.
 ## 0.13.0
 
 - New: the agent can ask you to close, comment on or merge the repo's issues and PRs (it has no GitHub access). Each

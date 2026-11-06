@@ -21,6 +21,8 @@ your desk.
   or onto one of the repo's open PRs instead, replacing what's on its branch.
 - **Break out:** "break out" gives you `house-elves resume <id>`, which carries a Claude Code session on in a terminal, in
   its clone, and hands it back to the desk when you exit.
+- **Voice:** 🎤 in the message box: the desk listens (your browser's speech recognition, or Whisper on its machine) and
+  the words go into the box, for you to send.
 - **Session variables:** names and values in Sessions' settings (an API key for what a session builds) that the
   commands every session's agent runs have, while the agent itself doesn't; the desk only shows their names (runner 0.53.0).
   Paste a screenshot, drag files onto the session (or the New session form), or attach them: images and PDFs go to Claude Code with your message (up to 4
