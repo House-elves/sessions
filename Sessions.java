@@ -1415,8 +1415,8 @@ public class Sessions implements Callable<Integer> {
     }
 
     /**
-     * delete: the session's file and its agents' reports. Its clone is the runner's: the tab has it removed first
-     * (elf.removeSlot), which the runner refuses while the agent works there.
+     * delete: the session's file, its agents' reports and its files, once you confirmed it in the desk's bar. Its clone
+     * is the runner's: the tab has it removed after (elf.removeSlot). Refused while the agent works, as the runner would.
      */
     static JsonNode delete(JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));

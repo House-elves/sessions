@@ -1,5 +1,10 @@
 # What's new
 
+## 0.17.2
+
+- **delete** asks once, in the desk's bar. It asked twice before, and its clone was already gone by the second
+  question, so Cancel there left a session without its clone.
+
 ## 0.17.0
 
 - Attach any file to a message: a slide deck, a spreadsheet, a zip, up to 50 MB. Images, PDFs and Word files are shown to the

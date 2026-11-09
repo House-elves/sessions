@@ -687,10 +687,8 @@ class SessionsTab extends LitElement {
                     ${this._editing ? nothing : html`<button class="t-btn" @click=${() => { this._editing = 'name'; }}>rename</button>`}
                     <button class="t-btn" @click=${() => this._act('archive', { session: s.id, archived: !s.archived }, 'Couldn\'t archive it')}>
                         ${s.archived ? 'unarchive' : 'archive'}</button>
-                    ${this._confirmDelete ? html`<span class="t-warn">delete it, with its clone?
-                        <button class="t-btn t-red" ?disabled=${busy || !!this._busy} @click=${() => this._delete(s)}>yes, delete</button>
-                        <button class="t-btn" @click=${() => { this._confirmDelete = false; }}>keep it</button></span>`
-                        : html`<button class="t-btn" ?disabled=${busy} title=${busy ? 'Stop it first' : ''} @click=${() => { this._confirmDelete = true; }}>delete</button>`}
+                    <button class="t-btn" ?disabled=${busy || !!this._busy} title=${busy ? 'Stop it first' : 'The desk asks you first'}
+                        @click=${() => this._delete(s)}>delete</button>
                 </div>
                 ${this._error ? html`<div class="t-err" role="alert">⚠ ${this._error} <button class="t-btn" @click=${() => { this._error = null; }}>dismiss</button></div>` : nothing}
             </header>
@@ -1022,7 +1020,7 @@ class SessionsTab extends LitElement {
                     aria-label=${this._listening ? 'Stop listening' : 'Speak your message'} @click=${() => this._voice(s)}>${this._listening ? '■' : '🎤'}</button>` : nothing}
             </div>
             <div class="t-foot">
-                <span>enter to send · ctrl+enter new line ·${suggestion(s, busy) ? ' tab takes the suggestion ·' : ''} paste or drag in images, PDFs, Word and text files ·
+                <span>enter to send · ctrl+enter new line ·${suggestion(s, busy) ? ' tab takes the suggestion ·' : ''} paste or drag in any file ·
                     <button class="t-btn" @click=${() => this.renderRoot.querySelector('.t-pick')?.click()}>attach</button>
                     ${busy && this._canSay(s) ? html` · while it works, enter <button class="t-btn" title="Switch: send at once, or queue for when it finishes"
                         @click=${() => this._switchSay()}>${this._sayMode === 'queue' ? 'queues it' : 'sends it now'}</button>` : nothing}
@@ -1370,19 +1368,24 @@ class SessionsTab extends LitElement {
         if (goal) await this._act('edit-goal', { session: s.id, goal }, 'Couldn\'t save the goal');
     }
 
-    /** Its clone goes first (the runner refuses while it works there), then the session. */
+    /**
+     * The desk's bar asks you first; then the session goes (refused while it works), then its clone. Cancel in the bar
+     * leaves both as they were.
+     */
     async _delete(s) {
         this._busy = 'delete';
         try {
-            await elf.removeSlot(s.repo, s.id);
-        } catch (e) {
-            this._error = `Couldn't remove its clone: ${e.message}`;
+            const r = await this._act('delete', { session: s.id, name: s.name }, 'Couldn\'t delete it');
+            if (!r) return;
+            try {
+                await elf.removeSlot(s.repo, s.id);
+            } catch (e) {
+                this._error = `Deleted, but its clone stays on this machine: ${e.message}`;
+            }
+            this._go('', true);
+        } finally {
             this._busy = null;
-            return;
         }
-        this._busy = null;
-        const r = await this._act('delete', { session: s.id, name: s.name }, 'Couldn\'t delete it');
-        if (r) this._go('', true);
     }
 
     /** The Todo list picks a todo and comes back here with link/<id>/todo-list/<todo>/<title>. */
