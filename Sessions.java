@@ -648,6 +648,14 @@ public class Sessions implements Callable<Integer> {
         harvest(s);
         if (running(s)) throw new IllegalStateException("It's still working: push when this turn is done");
         JsonNode git = work(s);
+        // Its PR was merged or closed (on GitHub, not here): its branch is done with, and the next push starts over,
+        // on a new branch and PR (or one of your open PRs), as a first push does.
+        String done = finishedPr(s, token);
+        if (done != null) {
+            s.remove("pushed");
+            s.remove("pr");
+            s.put("branch", freshBranch(config, s, token));
+        }
         String pushed = s.path("pushed").asText("");
         if (pr > 0 && (!pushed.isEmpty() || s.path("pr").isTextual())) {
             throw new IllegalStateException("This session pushes to its own PR already");
@@ -696,8 +704,37 @@ public class Sessions implements Callable<Integer> {
         out.put("patch", clip(git.path("patch").asText(""), 150_000));
         out.put("patchCut", git.path("patchCut").asBoolean(false) || git.path("patch").asText("").length() > 150_000);
         if (s.path("pr").isTextual()) out.put("pr", s.path("pr").asText());
+        if (done != null) out.put("finished", done);
         out.put("title", oneLine(s.path("name").asText(), 200));
         return out;
+    }
+
+    /** "PR #311 was merged" when the session's PR is merged or closed on GitHub, else null (none, or still open). */
+    static String finishedPr(ObjectNode s, String token) throws Exception {
+        Matcher m = Pattern.compile("https://github\\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/(\\d{1,9})").matcher(s.path("pr").asText(""));
+        if (!m.matches()) return null;
+        String json = run(List.of("gh", "api", "repos/" + m.group(1) + "/pulls/" + m.group(2), "--jq", "{state, merged}"), token);
+        if (json == null || json.isBlank()) return null;
+        JsonNode p = JSON.readTree(json);
+        if (p.path("state").asText().equals("open")) return null;
+        return "PR #" + m.group(2) + (p.path("merged").asBoolean() ? " was merged" : " was closed");
+    }
+
+    /** A branch for the session's next PR: its usual name with -2, -3… after it, the first not on GitHub yet. */
+    static String freshBranch(Config config, ObjectNode s, String token) throws Exception {
+        String had = s.path("branch").asText("");
+        String base = had.replaceFirst("-\\d{1,3}$", "");
+        if (!BRANCH.matcher(base).matches()) {
+            s.remove("branch");
+            base = branch(s);
+        }
+        String headRepo = headRepo(config, s, token);
+        for (int i = 2; i < 100; i++) {
+            String name = base + "-" + i;
+            String sha = run(List.of("gh", "api", "repos/" + headRepo + "/branches/" + name, "--jq", ".commit.sha"), token);
+            if (sha == null || sha.isBlank()) return name;
+        }
+        throw new IllegalStateException("Couldn't find a free branch name after " + base);
     }
 
     /** push-preview: what a push would send, and where, for you to read before you push. */

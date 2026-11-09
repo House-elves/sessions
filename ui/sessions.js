@@ -779,6 +779,7 @@ class SessionsTab extends LitElement {
         const n = (p.commits ?? []).length;
         const unchosen = !p.update && !p.already && !p.chosen && (p.prs ?? []).length > 0 && !(p.pr && !p.prNumber);
         return html`<div class="t-push">
+            ${p.finished ? html`<div class="t-dim">${p.finished}, so this goes to a new branch and PR, or onto one of your open PRs.</div>` : nothing}
             ${this._pushWhere(s, p, busy)}
             ${unchosen ? html`<div class="t-dim">You have open PRs on ${p.repo}: push onto one of them, or to a new branch and draft PR.</div>` : html`
             <div><b>${p.already ? 'Already pushed' : p.update ? 'Update' : 'Push to'}</b> ${p.target}

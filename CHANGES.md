@@ -1,5 +1,10 @@
 # What's new
 
+## 0.17.3
+
+- **push** after a session's PR was merged or closed on GitHub goes to a new branch and draft PR (its branch name with -2, -3…),
+  or onto one of your open PRs. Before, it kept pushing to the merged PR's branch, and GitHub refused every time.
+
 ## 0.17.2
 
 - **delete** asks once, in the desk's bar. It asked twice before, and its clone was already gone by the second
