@@ -67,7 +67,7 @@ function dataUrl(file, type) {
         r.readAsDataURL(file);
     });
 }
-const PART = 195_000;
+const PART = 60_000;
 
 /** An image file as a data URL that fits: PNG if it's small enough (sharpest for text), else WebP or JPEG, smaller. */
 async function fit(file) {

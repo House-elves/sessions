@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.17.0
+version: 0.17.1
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -118,7 +118,7 @@ actions:
       file: {pattern: "([0-9a-f]{16})?", optional: true}
       kind: {one-of: [image, text, pdf, docx, file]}
       name: {pattern: "[^/\\\\\\p{Cntrl}]{1,120}", max: 120}
-      data: {pattern: "[\\s\\S]{0,200000}", max: 200000}
+      data: {pattern: "[\\s\\S]{0,60000}", max: 60000}
       done: {kind: bool}
   agent-done:
     label: Keep a turn's reply
