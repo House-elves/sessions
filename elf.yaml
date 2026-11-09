@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.16.1
+version: 0.17.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -20,6 +20,7 @@ reads:
   - Which coding agents are installed on this machine, to offer them for a new session.
   - When you start a session from a todo, that todo in the Todo list's saved list (its description, checklist and issues, which it only reads), as the session's goal for you to read and change before you start.
 writes:
+  - Any other file you attach to a message (a slide deck, a spreadsheet), copied into the session's clone in .attached/ (which git leaves out) for its agent to open.
   - Your sessions, on this machine. The agent's commits stay in its clone on this machine until you push them.
   - When you push a session (you read its commits and diff first, and confirm in the desk's bar), its commits go to a
     branch on GitHub (session/<its name>, on the repo, or on your fork when you can't push there), with your gh
@@ -115,9 +116,9 @@ actions:
       # A new session's first message has no session yet: its files wait under "new".
       session: {pattern: "(s[0-9]{10,16}|new)"}
       file: {pattern: "([0-9a-f]{16})?", optional: true}
-      kind: {one-of: [image, text, pdf, docx]}
+      kind: {one-of: [image, text, pdf, docx, file]}
       name: {pattern: "[^/\\\\\\p{Cntrl}]{1,120}", max: 120}
-      data: {pattern: "[\\s\\S]{0,60000}", max: 60000}
+      data: {pattern: "[\\s\\S]{0,200000}", max: 200000}
       done: {kind: bool}
   agent-done:
     label: Keep a turn's reply

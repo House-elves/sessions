@@ -53,6 +53,8 @@ public class Sessions implements Callable<Integer> {
     static final int MAX_QUEUED = 5;
     /** A PDF (shown to Claude whole) or a Word file (read as text): at most this big, so about 4 MB as a data URL. */
     static final int MAX_DOCUMENT_BYTES = 3_000_000;
+    /** Any other file you attach goes into the session's clone (.attached/), up to this big. */
+    static final long MAX_ATTACH_BYTES = 50L * 1024 * 1024;
     static final String DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     /** Outside the data folders the tab reads: one action at a time changes the sessions. */
     static final Path LOCK = Config.DIR.resolve("sessions.lock");
@@ -303,7 +305,7 @@ public class Sessions implements Callable<Integer> {
         String session = in.path("session").asText("");
         if (!session.equals("new")) load(session); // it must be there
         String kind = in.path("kind").asText("");
-        if (!List.of("image", "text", "pdf", "docx").contains(kind)) throw new IllegalArgumentException("A file is an image, text, a PDF or a Word file");
+        if (!List.of("image", "text", "pdf", "docx", "file").contains(kind)) throw new IllegalArgumentException("A file is an image, text, a PDF, a Word file or another file");
         Files.createDirectories(ATTACHMENTS);
         String id = in.path("file").asText("");
         if (id.isEmpty()) {
@@ -323,7 +325,8 @@ public class Sessions implements Callable<Integer> {
         }
         Path part = ATTACHMENTS.resolve(session + "-" + id + ".part");
         String data = in.path("data").asText("");
-        long max = kind.equals("image") ? MAX_IMAGE_CHARS : kind.equals("text") ? MAX_DOC_CHARS * 4L : MAX_DOCUMENT_BYTES / 3L * 4 + 200;
+        long max = kind.equals("image") ? MAX_IMAGE_CHARS : kind.equals("text") ? MAX_DOC_CHARS * 4L
+                : kind.equals("file") ? MAX_ATTACH_BYTES / 3L * 4 + 400 : MAX_DOCUMENT_BYTES / 3L * 4 + 200;
         if ((Files.exists(part) ? Files.size(part) : 0) + data.length() > max) {
             Files.deleteIfExists(part);
             throw new IllegalArgumentException(kind.equals("image") ? "That image is too big" : "That file is too long to put in a message");
@@ -334,7 +337,14 @@ public class Sessions implements Callable<Integer> {
         Files.deleteIfExists(part);
         Path meta = ATTACHMENTS.resolve(session + "-" + id + ".meta.json");
         ObjectNode m = (ObjectNode) JSON.readTree(meta.toFile());
-        if (kind.equals("pdf")) {
+        if (kind.equals("file")) {
+            // Any other file (a slide deck): the agent finds it in its clone, in .attached/ (the runner copies it there).
+            byte[] bytes = dataUrl(all, "application/octet-stream");
+            if (bytes.length > MAX_ATTACH_BYTES) throw new IllegalArgumentException("That file is bigger than 50 MB");
+            String file = session + "-" + id + ".bin";
+            Files.write(ATTACHMENTS.resolve(file), bytes);
+            m.put("file", file).put("type", "application/octet-stream").put("size", bytes.length);
+        } else if (kind.equals("pdf")) {
             byte[] bytes = dataUrl(all, "application/pdf");
             if (!starts(bytes, 0, '%', 'P', 'D', 'F', '-') || bytes.length > MAX_DOCUMENT_BYTES) throw new IllegalArgumentException("That isn't a PDF of at most 3 MB");
             String file = session + "-" + id + ".pdf";
@@ -1123,10 +1133,15 @@ public class Sessions implements Callable<Integer> {
         // Its files: images shown to the agent with the message, text files put in the message.
         List<ObjectNode> files = files(s.path("id").asText(), fileIds);
         ArrayNode images = JSON.createArrayNode();
+        ArrayNode attach = JSON.createArrayNode();
         StringBuilder docs = new StringBuilder();
         for (ObjectNode f : files) {
             Path p = ATTACHMENTS.resolve(f.path("file").asText());
-            if (List.of("image", "pdf").contains(f.path("kind").asText())) {
+            if (f.path("kind").asText().equals("file")) {
+                if (!runnerAtLeast(0, 56)) throw new IllegalStateException("Giving the agent " + f.path("name").asText() + " needs runner 0.56.0 or later: update the desk");
+                String name = attachedName(f.path("name").asText("file"), attach);
+                attach.addObject().put("folder", "attachments").put("file", f.path("file").asText()).put("name", name);
+            } else if (List.of("image", "pdf").contains(f.path("kind").asText())) {
                 if (bob) throw new IllegalArgumentException("IBM Bob isn't shown images or PDFs: attach text or Word files");
                 if (images.size() >= MAX_IMAGES) throw new IllegalArgumentException("A message takes at most " + MAX_IMAGES + " images and PDFs");
                 if (f.path("kind").asText().equals("pdf") && !runnerAtLeast(0, 50)) throw new IllegalStateException("Showing PDFs needs runner 0.50.0 or later: update the desk");
@@ -1152,8 +1167,14 @@ public class Sessions implements Callable<Integer> {
         agent.putObject("checkout").put("repo", s.path("repo").asText()).put("number", 0).put("kind", "REPO")
                 .put("slot", s.path("id").asText());
         if (!vars.isEmpty()) agent.set("env", vars);
-        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + SUGGEST_RULE + varsNote(vars, bob) + pushes);
+        StringBuilder given = new StringBuilder();
+        if (!attach.isEmpty()) {
+            given.append("\n\nI attached ").append(attach.size() == 1 ? "a file" : "files").append(" for you, in the .attached folder of your working directory (git leaves it out):");
+            for (JsonNode a : attach) given.append("\n- .attached/").append(a.path("name").asText());
+        }
+        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + given + SUGGEST_RULE + varsNote(vars, bob) + pushes);
         if (!images.isEmpty()) agent.set("images", images);
+        if (!attach.isEmpty()) agent.set("attach", attach);
         // The session keeps the agent it started with: neither can resume the other's.
         if (bob) agent.put("agent", "bob");
         if (n > 1) agent.put("goal", goal(s));
@@ -1162,6 +1183,22 @@ public class Sessions implements Callable<Integer> {
         ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText());
         out.set("agent", agent);
         return out;
+    }
+
+    /** A file's name in .attached/: as you named it, safe for a file name, and not one another file there has. */
+    static String attachedName(String name, ArrayNode taken) {
+        String n = name.replaceAll("[/\\\\\\p{Cntrl}]", "_").strip().replaceFirst("^\\.+", "");
+        if (n.isEmpty()) n = "file";
+        if (n.length() > 100) n = n.substring(0, 100);
+        String base = n;
+        for (int i = 2; ; i++) {
+            String c = n;
+            boolean used = false;
+            for (JsonNode t : taken) used |= t.path("name").asText().equalsIgnoreCase(c);
+            if (!used) return n;
+            int dot = base.lastIndexOf('.');
+            n = dot > 0 ? base.substring(0, dot) + " (" + i + ")" + base.substring(dot) : base + " (" + i + ")";
+        }
     }
 
     /**

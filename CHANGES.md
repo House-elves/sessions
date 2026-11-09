@@ -1,5 +1,12 @@
 # What's new
 
+## 0.17.0
+
+- Attach any file to a message: a slide deck, a spreadsheet, a zip, up to 50 MB. Images, PDFs and Word files are shown to the
+  agent as before, and text goes into the message. Anything else is copied into the session's clone, in
+  `.attached/` (git leaves it out), and the message tells the agent where it is. A text file too long for a message
+  goes there too. Needs runner 0.56.0.
+
 ## 0.16.1
 
 - What you said while it worked shows in its own style, not as one of its steps.

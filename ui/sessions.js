@@ -47,8 +47,16 @@ function kindOf(file) {
     if (file.type === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
     if (file.type === DOCX || name.endsWith('.docx')) return 'docx';
     if (file.type === 'application/msword' || name.endsWith('.doc')) return 'doc';
-    return 'text';
+    if (TEXT_TYPE.test(file.type) || (!file.type && !BINARY_NAME.test(name))) return 'text';
+    // Anything else (a slide deck, a spreadsheet, a zip, a video): copied into its clone, for the agent to open there.
+    return 'file';
 }
+
+/** Text that goes into the message, by its type (a file with no type is text unless its name says otherwise). */
+const TEXT_TYPE = /^(text\/|application\/(json|xml|x-yaml|yaml|javascript|x-sh|x-shellscript|sql|toml|x-httpd-php)$)/;
+const BINARY_NAME = /\.(zip|jar|war|gz|tgz|bz2|xz|7z|rar|pptx?|xlsx?|odt|ods|odp|key|numbers|pages|mp4|mov|webm|mkv|avi|mp3|wav|ogg|flac|bin|exe|so|dll|dylib|class|psd|ai|sketch|fig|sqlite|db|ttf|otf|woff2?|ico|heic)$/;
+/** A file the agent opens in its clone (.attached/) may be this big. */
+const MAX_ATTACH_BYTES = 50 * 1024 * 1024;
 
 /** A file as a data URL of the type it should be. */
 function dataUrl(file, type) {
@@ -59,7 +67,7 @@ function dataUrl(file, type) {
         r.readAsDataURL(file);
     });
 }
-const PART = 60_000;
+const PART = 195_000;
 
 /** An image file as a data URL that fits: PNG if it's small enough (sharpest for text), else WebP or JPEG, smaller. */
 async function fit(file) {
@@ -1181,7 +1189,7 @@ class SessionsTab extends LitElement {
     _newFiles() {
         const files = this._files ?? [];
         return html`<div class="dropbox">
-            <span>Files for the first message: drop images, PDFs, Word or text files on the form, or
+            <span>Files for the first message: drop any file on the form (others than images, PDFs, Word and text files go in its clone, in .attached/), or
                 <button type="button" class="linkish" @click=${() => this.renderRoot.querySelector('.new-pick')?.click()}>choose files</button>.</span>
             ${files.length ? html`<div class="files">${files.map(f => html`<span class="file ${f.status}">${f.name}${
                 f.status === 'sending' ? ` ${f.sent ?? 0}%` : f.status === 'failed' ? ` ✗ ${f.error}` : ''}
@@ -1223,10 +1231,15 @@ class SessionsTab extends LitElement {
         else if (f.kind === 'pdf' || f.kind === 'docx') {
             if (file.size > MAX_DOCUMENT_BYTES) throw new Error('bigger than 3 MB');
             data = await dataUrl(file, f.kind === 'pdf' ? 'application/pdf' : DOCX);
-        } else {
-            if (file.size > MAX_DOC_BYTES) throw new Error('too long to put in a message');
-            data = await file.text();
-            if (data.includes('\u0000')) throw new Error('not a text file');
+        } else if (f.kind === 'text') {
+            // Text too long for a message, or not text after all, goes into its clone as a file instead.
+            const text = file.size <= MAX_DOC_BYTES ? await file.text() : null;
+            if (text == null || text.includes('\u0000')) f.kind = 'file';
+            else data = text;
+        }
+        if (f.kind === 'file') {
+            if (file.size > MAX_ATTACH_BYTES) throw new Error('bigger than 50 MB');
+            data = await dataUrl(file, 'application/octet-stream');
         }
         let id = '';
         for (let at = 0; at < Math.max(1, data.length); at += PART) {
