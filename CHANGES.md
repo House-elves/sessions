@@ -1,6 +1,10 @@
 # What's new
 
 
+## 0.18.5
+
+- A new repository's name is checked as you type it (its pattern was one browsers refuse).
+
 ## 0.18.4
 
 - A history of the agent's own can go to the new repository as one commit, with a message you give, rather than

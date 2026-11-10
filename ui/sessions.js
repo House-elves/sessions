@@ -788,7 +788,7 @@ class SessionsTab extends LitElement {
         return html`<div class="t-row t-inline repo-form" @keydown=${e => { if (e.key === 'Enter') { e.preventDefault(); go(e); } }}>
             <select class="t-sel" name="rowner" aria-label="Owner">${owners.map(o => html`<option ?selected=${o === r.owner}>${o}</option>`)}</select>
             <span class="t-dim">/</span>
-            <input name="rname" class="t-cmd" required maxlength="100" pattern="[A-Za-z0-9._\-]{1,100}" placeholder="new-repo"
+            <input name="rname" class="t-cmd" required maxlength="100" pattern="[A-Za-z0-9._\\-]{1,100}" placeholder="new-repo"
                 aria-label="Repository name" spellcheck="false" autocomplete="off" .value=${r.name ?? ''}>
             <select class="t-sel" name="rvis" aria-label="Who can see it">
                 <option value="private" ?selected=${r.visibility !== 'public'}>private</option>
