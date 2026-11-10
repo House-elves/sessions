@@ -652,6 +652,7 @@ public class Sessions implements Callable<Integer> {
         harvest(s);
         if (running(s)) throw new IllegalStateException("It's still working: push when this turn is done");
         JsonNode last = lastGit(s);
+        if (pr == 0 && staleUnrelated(last) && runnerAtLeast(0, 57)) return readAgain(s);
         if (pr == 0 && last != null && last.path("unrelated").asBoolean() && SHA.matcher(last.path("to").asText("")).matches()) {
             return unrelatedPreview(config, s, last);
         }
@@ -757,16 +758,34 @@ public class Sessions implements Callable<Integer> {
 
     /** The newest finished turn's report of the clone's commits, whatever it says; null before there is one. */
     static JsonNode lastGit(ObjectNode s) throws IOException {
+        // The runner's read of the clone without a turn (slotGit, runner 0.57.1), when it's newer than the last turn's.
+        Path read = AGENTS.resolve("slot-" + s.path("id").asText() + ".json");
+        long readAt = Files.isRegularFile(read) ? Files.getLastModifiedTime(read).toMillis() : -1;
         JsonNode turns = s.path("turns");
         for (int k = turns.size() - 1; k >= 0; k--) {
             JsonNode t = turns.get(k);
             if (!t.path("status").asText().equals("done")) continue;
             Path f = AGENTS.resolve(t.path("agent").asText() + ".json");
             if (!Files.isRegularFile(f)) continue;
+            if (readAt > Files.getLastModifiedTime(f).toMillis()) break;
             JsonNode git = JSON.readTree(f.toFile()).path("git");
             if (git.isObject() && !git.isEmpty()) return git;
         }
-        return null;
+        if (readAt < 0) return null;
+        JsonNode git = JSON.readTree(read.toFile());
+        return git.isObject() && !git.isEmpty() ? git : null;
+    }
+
+    /** A report from before runner 0.57.0 that says the history is the agent's own, without its commits. */
+    static boolean staleUnrelated(JsonNode git) {
+        return git != null && git.path("error").asText("").contains("merge-base") && !SHA.matcher(git.path("to").asText("")).matches();
+    }
+
+    /** Asks the runner to read the session's clone again (no turn): the tab then looks again. */
+    static ObjectNode readAgain(ObjectNode s) {
+        ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("readAgain", true);
+        out.putObject("slotGit").put("repo", s.path("repo").asText()).put("slot", s.path("id").asText());
+        return out;
     }
 
     /** Work with a history of its own (the agent started a new project): it can only go to a new repository. */
@@ -790,6 +809,7 @@ public class Sessions implements Callable<Integer> {
         if (!REPO.matcher(target).matches()) throw new IllegalArgumentException("A repository is owner/name");
         if (target.equalsIgnoreCase(s.path("repo").asText())) throw new IllegalArgumentException("That's the session's own repo");
         JsonNode git = lastGit(s);
+        if (staleUnrelated(git)) return readAgain(s);
         if (git == null || !SHA.matcher(git.path("to").asText("")).matches()) {
             throw new IllegalStateException("There are no commits to push yet: ask the agent to commit its work");
         }

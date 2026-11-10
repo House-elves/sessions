@@ -766,7 +766,9 @@ class SessionsTab extends LitElement {
     async _pushPreviewNew(s, target) {
         this._pushed = null;
         this._pushDiff = false;
-        const p = await this._act('push-preview', { session: s.id, newRepo: target }, 'Couldn\'t look at it');
+        let p = await this._act('push-preview', { session: s.id, newRepo: target }, 'Couldn\'t look at it');
+        if (p?.readAgain) p = p.slotGit?.status === 200 ? await this._act('push-preview', { session: s.id, newRepo: target }, 'Couldn\'t look at it') : null;
+        if (p?.readAgain) p = null;
         if (p && p.session === s.id) this._push = { ...p, chosen: true };
     }
 
@@ -814,7 +816,14 @@ class SessionsTab extends LitElement {
         this._newRepo = null;
         this._pushDiff = false;
         const prs = this._push?.session === s.id ? this._push.prs : null;
-        const p = await this._act('push-preview', { session: s.id, ...(pr ? { pr } : {}) }, 'Couldn\'t read its commits');
+        let p = await this._act('push-preview', { session: s.id, ...(pr ? { pr } : {}) }, 'Couldn\'t read its commits');
+        // The runner read the clone again (its last report was too old to say): look once more.
+        if (p?.readAgain) {
+            const r = p.slotGit;
+            p = r?.status === 200 ? await this._act('push-preview', { session: s.id, ...(pr ? { pr } : {}) }, 'Couldn\'t read its commits') : null;
+            if (!p && !this._error || p?.readAgain) this._error = `Couldn't read the session's clone again: ${r?.error ?? 'update the desk (runner 0.57.1)'}`;
+            if (p?.readAgain) p = null;
+        }
         // With open PRs of yours on the repo, where the first push goes is yours to pick, not a default.
         if (p && p.session === s.id) this._push = { ...p, prs: p.prs ?? prs, chosen: pr !== undefined };
         else if (!pr) this._push = null;

@@ -1,6 +1,11 @@
 # What's new
 
 
+## 0.18.3
+
+- push no longer needs another message to the agent first when its last report was from before runner 0.57: the
+  runner reads the session's clone again, with no turn (and none of a turn's cost). Needs runner 0.57.1.
+
 ## 0.18.2
 
 - "Or create a new repository…" sits on one line in the New session form, with a Cancel.
