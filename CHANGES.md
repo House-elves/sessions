@@ -1,6 +1,11 @@
 # What's new
 
 
+## 0.18.1
+
+- An action's error (a push that can't be read, say) stays shown until you dismiss it, or do something else. The
+  reload after each action cleared it at once, so some never showed.
+
 ## 0.18.0
 
 - New: push a session to a new repository. In the push box, choose "a new repository of yours…", give its owner (you

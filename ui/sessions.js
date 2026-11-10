@@ -437,9 +437,12 @@ class SessionsTab extends LitElement {
                 }
             }
             this._live = live;
-            this._error = null;
+            // Only clears its own error: an action's (which reloads after) stays until you dismiss it.
+            if (this._loadFailed) this._error = null;
+            this._loadFailed = false;
         } catch (e) {
             this._error = e.message;
+            this._loadFailed = true;
         }
     }
 
@@ -495,6 +498,7 @@ class SessionsTab extends LitElement {
 
     async _act(action, params, failed) {
         this._busy = action;
+        this._error = null;
         try {
             return await elf.act(action, params);
         } catch (e) {
