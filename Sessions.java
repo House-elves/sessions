@@ -155,6 +155,8 @@ public class Sessions implements Callable<Integer> {
                 case "link" -> link(in);
                 case "unlink" -> unlink(in);
                 case "delete" -> delete(in);
+                case "context-clear" -> contextClear(in);
+                case "context-compact" -> contextCompact(in);
                 default -> throw new IllegalArgumentException("Not an action: " + action);
             };
             // The last line printed is the action's answer to the tab (or, with "agent", to the runner first).
@@ -1415,6 +1417,7 @@ public class Sessions implements Callable<Integer> {
         }
         while (turns.size() > MAX_TURNS) turns.remove(0);
         String pushes = pushesNote(s);
+        String fresh = freshNote(s);
         save(s);
 
         ObjectNode agent = JSON.createObjectNode().put("id", agentId);
@@ -1426,7 +1429,7 @@ public class Sessions implements Callable<Integer> {
             given.append("\n\nI attached ").append(attach.size() == 1 ? "a file" : "files").append(" for you, in the .attached folder of your working directory (git leaves it out):");
             for (JsonNode a : attach) given.append("\n- .attached/").append(a.path("name").asText());
         }
-        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + given + SUGGEST_RULE + varsNote(vars, bob) + pushes);
+        agent.put("prompt", (text.isEmpty() ? "See the attached files." : text) + docs + given + SUGGEST_RULE + varsNote(vars, bob) + pushes + fresh);
         if (!images.isEmpty()) agent.set("images", images);
         if (!attach.isEmpty()) agent.set("attach", attach);
         // The session keeps the agent it started with: neither can resume the other's.
@@ -1562,6 +1565,12 @@ public class Sessions implements Callable<Integer> {
                         if (r[1] != null) turn.put("suggest", r[1]);
                         String session = a.path("session").asText("");
                         if (session.matches("[A-Za-z0-9-]{1,100}")) s.put("session", session);
+                        // Its handover written: the next turn starts a new conversation with it.
+                        if (turn.path("kind").asText().equals("compact") && !r[0].isBlank()) {
+                            s.remove("session");
+                            s.put("carry", clip(r[0], MAX_CARRY)).put("contextReset", Instant.now().toString());
+                            turn.put("compacted", true);
+                        }
                     }
                     case "failed" -> turn.put("status", "failed").put("error", clip(a.path("error").asText("It failed"), 2000));
                     case "cancelled" -> turn.put("status", "stopped");
@@ -1590,6 +1599,64 @@ public class Sessions implements Callable<Integer> {
                 // Read again next time: it may be half way through being written.
             }
         }
+    }
+
+    // ---- the agent's context: cleared, or compacted into a summary it carries into a new conversation ----
+
+    static final int MAX_CARRY = 30_000;
+
+    static final String COMPACT_PROMPT = "Your context is getting full, so this conversation will end after this answer, and the "
+            + "next message starts a new one with only your answer to this. Write a handover for yourself: what this session is "
+            + "for and where it stands; what has been done and decided (and why, where it matters); what's in this clone (branches, "
+            + "files, anything not committed) and anything running or set up; what's open or next, with what I last asked; and the "
+            + "gotchas you learned. Be complete but brief: facts, names and paths, not the story. Change nothing in the clone.";
+
+    /** Once, in the first turn of a new conversation: why it starts afresh, with the summary it carries. */
+    static String freshNote(ObjectNode s) {
+        String carry = s.path("carry").asText("");
+        boolean cleared = s.path("cleared").asBoolean(false);
+        s.remove("carry");
+        s.remove("cleared");
+        if (!carry.isEmpty()) {
+            return "\n<desk-note>This is a new conversation: the earlier one was compacted to free up your context. Your own "
+                    + "handover from it:\n<handover>\n" + carry.replace("</handover", "<\\/handover") + "\n</handover>\n"
+                    + "Your clone is as you left it.</desk-note>";
+        }
+        if (cleared) {
+            return "\n<desk-note>This is a new conversation: I cleared the earlier one. Your clone is as it was (git log and git "
+                    + "status show the work so far); ask me if you need to know more about what we did.</desk-note>";
+        }
+        return "";
+    }
+
+    /** context-clear (on your click in the desk's bar): the next turn starts a new conversation, with none of this one. */
+    static JsonNode contextClear(JsonNode in) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        harvest(s);
+        if (running(s)) throw new IllegalStateException("It's working: clear its context when this turn is done");
+        if (!s.path("session").isTextual() && !s.has("carry")) throw new IllegalStateException("Its context is clear already");
+        s.remove("session");
+        s.remove("carry");
+        s.put("cleared", true).put("contextReset", Instant.now().toString());
+        s.withArray("resets").addObject().put("at", Instant.now().toString()).put("kind", "cleared");
+        save(s);
+        return JSON.createObjectNode().put("session", s.path("id").asText()).put("cleared", true);
+    }
+
+    /**
+     * context-compact: a turn in which the agent writes its own handover; once it's done, the next turn starts a new
+     * conversation with only that (harvest).
+     */
+    static JsonNode contextCompact(JsonNode in) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        harvest(s);
+        if (running(s)) throw new IllegalStateException("It's working: compact its context when this turn is done");
+        if (!s.path("session").isTextual()) throw new IllegalStateException("There's no conversation to compact yet");
+        JsonNode out = turn(s, COMPACT_PROMPT, "");
+        ObjectNode t = (ObjectNode) s.withArray("turns").get(s.withArray("turns").size() - 1);
+        t.put("kind", "compact").put("you", "/compact");
+        save(s);
+        return out;
     }
 
     static JsonNode rename(JsonNode in) throws Exception {

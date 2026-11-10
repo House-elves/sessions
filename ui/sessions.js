@@ -113,13 +113,16 @@ function took(ms) {
 function totals(s) {
     const turns = s.turns ?? [];
     const sum = k => turns.reduce((n, t) => n + (typeof t[k] === 'number' ? t[k] : 0), 0);
-    const last = [...turns].reverse().find(t => t.contextWindow > 0);
+    const found = [...turns].reverse().find(t => t.contextWindow > 0);
+    // Cleared or compacted since: a new conversation, nothing in it yet.
+    const reset = s.contextReset && (!found || Date.parse(s.contextReset) >= Date.parse(found.finished ?? found.at));
+    const last = reset ? null : found;
     return {
         cost: turns.some(t => typeof t.cost === 'number') ? sum('cost') : null,
         bobcoins: turns.some(t => typeof t.bobcoins === 'number') ? sum('bobcoins') : null,
         ms: turns.some(t => typeof t.durationMs === 'number') ? sum('durationMs') : null,
         model: [...turns].reverse().find(t => t.model)?.model ?? s.model ?? null,
-        context: last ? Math.min(100, Math.round(last.contextUsed / last.contextWindow * 100)) : null,
+        context: last ? Math.min(100, Math.round(last.contextUsed / last.contextWindow * 100)) : reset ? 0 : null,
     };
 }
 /** The tags in its settings (TAGS), as spelled there. */
@@ -1051,7 +1054,28 @@ class SessionsTab extends LitElement {
             ${n.bobcoins !== null ? html`<span class="t-dim">${n.bobcoins.toFixed(2)} Bobcoins</span>` : nothing}
             ${n.ms !== null ? html`<span class="t-dim" title="How long the agent has worked, over all its turns">${took(n.ms)}</span>` : nothing}
             ${n.context !== null ? html`<span class=${n.context >= 80 ? 't-warn' : 't-dim'}
-                title="How full the model's context window is after the last turn; a long session gets compacted as it fills">${n.context}% context</span>` : nothing}`;
+                title="How full the model's context window is after the last turn">${n.context}% context</span>` : nothing}
+            ${this._contextButtons(s, n)}`;
+    }
+
+    /**
+     * compact (the agent writes a handover, and the next turn starts a new conversation with it) and clear (the next
+     * turn starts afresh): when there's a conversation to shrink.
+     */
+    _contextButtons(s, n) {
+        if (!s.session || working(s)) return nothing;
+        return html`<button class="t-btn" ?disabled=${!!this._busy} @click=${() => this._compact(s)}
+                title="The agent writes a handover of this conversation (one turn), and your next message starts a new conversation with only that">compact</button>
+            <button class="t-btn" ?disabled=${!!this._busy} @click=${() => this._clear(s)}
+                title="Your next message starts a new conversation. The chat here and the clone stay as they are">clear</button>`;
+    }
+
+    async _compact(s) {
+        await this._act('context-compact', { session: s.id }, 'Couldn\'t compact it');
+    }
+
+    async _clear(s) {
+        await this._act('context-clear', { session: s.id }, 'Couldn\'t clear it');
     }
 
     /** One of its lines, as Claude Code shows them: ⏺ Tool(what), or ⏺ what it said. */
@@ -1141,7 +1165,11 @@ class SessionsTab extends LitElement {
         const list = (s.pushes ?? []).filter(p => Date.parse(p.at) >= from && Date.parse(p.at) < to);
         return list.map(p => html`<div class="t-line ${p.ok ? 't-green' : 't-red'}"><span class="t-dot">${p.ok ? '✓' : '✗'}</span><span>${p.ok
             ? html`Pushed ${p.to.slice(0, 7)} to ${p.target}${p.pr ? html` · <a href=${p.pr} target="_blank" rel="noopener">${prLabel(p.pr)}</a>` : ''}${p.note ? html` <span class="t-warn">${p.note}</span>` : ''}`
-            : html`Push of ${p.to.slice(0, 7)} to ${p.target} failed: ${p.error}`} <span class="t-dim">· ${ago(p.at)}</span></span></div>`);
+            : html`Push of ${p.to.slice(0, 7)} to ${p.target} failed: ${p.error}`} <span class="t-dim">· ${ago(p.at)}</span></span></div>`)
+            .concat(t.compacted ? [html`<div class="t-line t-dim"><span class="t-dot">✻</span><span>Context compacted: the next message starts a
+                new conversation with only this handover.</span></div>`] : [])
+            .concat((s.resets ?? []).filter(r => Date.parse(r.at) >= from && Date.parse(r.at) < to).map(r => html`<div class="t-line t-dim">
+                <span class="t-dot">✻</span><span>Context cleared: the next message starts a new conversation · ${ago(r.at)}</span></div>`));
     }
 
     async _toggleLines(t) {
@@ -1501,6 +1529,15 @@ class SessionsTab extends LitElement {
         const ready = files.filter(f => f.status === 'ready');
         const text = box.value.trim();
         // "push" (please push, push it…) is for the desk, not the agent, which can't: it opens the push box instead.
+        // As in Claude Code: /compact and /clear are for the desk, not the agent.
+        if (!ready.length && /^\/(compact|clear)$/i.test(text) && !working(s)) {
+            box.value = '';
+            this._grow(box);
+            elf.store.set(`draft:${s.id}`, '').catch(() => {});
+            if (/compact/i.test(text)) await this._compact(s);
+            else await this._clear(s);
+            return;
+        }
         if (this._github && !ready.length && PUSH_ASK.test(text) && !working(s)) {
             box.value = '';
             this._grow(box);

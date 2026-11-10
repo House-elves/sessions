@@ -1,6 +1,13 @@
 # What's new
 
 
+## 0.19.0
+
+- New: **compact** and **clear** next to a session's context meter, or type /compact or /clear, as in Claude Code.
+  Compact has the agent write a handover of the conversation (one turn); your next message then starts a new
+  conversation with only that, so a long session stops paying for its whole history each turn. Clear starts the next
+  conversation afresh (asked first in the desk's bar). Either way the chat here and the clone stay as they are.
+
 ## 0.18.5
 
 - A new repository's name is checked as you type it (its pattern was one browsers refuse).
