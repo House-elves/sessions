@@ -1,6 +1,10 @@
 # What's new
 
 
+## 0.18.2
+
+- "Or create a new repository…" sits on one line in the New session form, with a Cancel.
+
 ## 0.18.1
 
 - An action's error (a push that can't be read, say) stays shown until you dismiss it, or do something else. The

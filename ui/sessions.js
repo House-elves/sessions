@@ -250,6 +250,11 @@ class SessionsTab extends LitElement {
         form.new .tagbox label { display: inline-flex; flex-direction: row; font-size: 14px; color: var(--ink); }
         form.new .hint { margin: 0; }
         form.new .row { padding-top: 4px; }
+        form.new .new-repo { display: grid; gap: 6px; justify-items: start; }
+        form.new .repo-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; width: 100%; }
+        form.new .repo-form select { width: auto; }
+        form.new .repo-form input { flex: 1 1 12rem; width: auto; min-width: 10rem; font: inherit; padding: 8px 10px;
+            color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-control, 9px); }
         /* Files for the first message: drop them anywhere on the form, or choose them. */
         .dropbox { display: grid; gap: 8px; padding: 14px 16px; border: 1.5px dashed var(--line, #ccc); border-radius: 8px;
             font-size: 13px; color: var(--muted); transition: border-color .12s, background .12s; }
@@ -786,6 +791,7 @@ class SessionsTab extends LitElement {
                 <option value="private" ?selected=${r.visibility !== 'public'}>private</option>
                 <option value="public" ?selected=${r.visibility === 'public'}>public</option></select>
             <button type="button" class="t-btn sm" ?disabled=${!!this._busy} @click=${go}>${label}</button>
+            ${r.session === 'new' ? html`<button type="button" class="sm quiet" @click=${() => { this._newRepo = null; }}>Cancel</button>` : nothing}
         </div>`;
     }
 
