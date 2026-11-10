@@ -29,7 +29,7 @@ writes:
   - When you create a repository from it (and confirm in the desk's bar), a new repository on GitHub, yours or your
     organization's, private or public as you choose, with your gh account.
   - When you push a session to a new repository instead (it must be empty, and you confirm in the desk's bar), the
-    clone's files go to its default branch with your gh account: as one commit with none of the old repo's history, or
+    clone's files go to its default branch with your gh account, as one commit with none of the old repo's history, or
     the agent's own history when it started a new project. The session then moves to that repository.
   - When the agent asks you to close, comment on or merge one of the session's repo's issues or PRs (it has no GitHub
     access itself), and you click it and confirm in the desk's bar, it does that on GitHub with your gh account.
