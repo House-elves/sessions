@@ -1,6 +1,11 @@
 # What's new
 
 
+## 0.20.0
+
+- An open session looks like the rest of the desk around its console: the session tabs, its name and numbers, its
+  buttons and the goal are in the desk's own style, and only the log and the prompt keep Claude Code's dark console.
+
 ## 0.19.0
 
 - New: **compact** and **clear** next to a session's context meter, or type /compact or /clear, as in Claude Code.

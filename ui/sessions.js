@@ -277,31 +277,46 @@ class SessionsTab extends LitElement {
         .tagbox { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
         .tagbox label { display: inline-flex; gap: 4px; align-items: center; font-weight: 400; }
 
-        /* An open session: a console like Claude Code's, in its colours and monospace, whatever the desk's theme. */
+        /* An open session: the desk around it (tabs, its name and numbers, buttons, the goal), and in the middle a console
+           like Claude Code's, in its colours and monospace whatever the desk's theme: the log and the prompt. */
+        .sess { height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; overflow: hidden; position: relative; }
+        .s-head { display: grid; gap: 8px; flex: none; }
+        .s-tabs { display: flex; gap: 6px; align-items: center; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; padding-bottom: 2px; }
+        .s-tabs a { display: inline-flex; gap: 6px; align-items: center; padding: 6px 12px; border-radius: 999px; flex: none;
+            border: 1px solid var(--line); color: var(--ink); text-decoration: none; background: var(--surface); max-width: 16rem; font-size: 14px; }
+        .s-tabs a span.n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .s-tabs a:hover { border-color: var(--muted); }
+        .s-tabs a[aria-current="page"] { border-color: var(--accent); background: var(--accent-soft); }
+        .s-tabs a.archived { opacity: .65; }
+        .s-select { width: auto; flex: none; padding: 5px 8px; font-size: 13px; }
+        .s-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; }
+        .s-name { margin: 0; font-size: 18px; }
+        .s-dim { color: var(--muted); }
+        .s-grow { flex: 1; }
+        .s-inline { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .s-inline label { display: inline-flex; gap: 4px; align-items: center; }
+        .s-inline input:not([type=checkbox]) { width: auto; padding: 5px 8px; }
+        .s-error { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+        .sess > .goal { margin: 0; flex: none; max-height: 40vh; overflow-y: auto; }
+        .goal-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+        .goal-text.folded { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .goal textarea { width: 100%; box-sizing: border-box; margin: 6px 0; }
+        .s-dropzone { position: absolute; inset: 8px; z-index: 5; pointer-events: none; display: grid; place-items: center;
+            border: 2px dashed var(--accent); border-radius: 14px; background: color-mix(in srgb, var(--bg) 92%, transparent);
+            color: var(--accent); font-size: 15px; text-align: center; }
         .term {
             --t-bg: #1a1918; --t-bg2: #262524; --t-ink: #e8e6e1; --t-dim: #8f8c86; --t-line: #3b3936;
             --t-acc: #d97757; --t-green: #6cc28a; --t-red: #e5786d; --t-warn: #e3b25c;
-            height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden;
+            flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
             background: var(--t-bg); color: var(--t-ink); border-radius: 10px; border: 1px solid var(--t-line);
             font: 13.5px/1.55 var(--font-code); }
         .term a { color: var(--t-acc); }
         .term b { font-weight: 600; }
-        .t-head { padding: 6px 12px 4px; border-bottom: 1px solid var(--t-line); display: grid; gap: 4px; }
-        .t-tabs { display: flex; gap: 4px; align-items: center; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
-        .t-tabs a { color: var(--t-dim); text-decoration: none; padding: 2px 10px; border-radius: 6px; max-width: 24rem; flex: none;
-            overflow: hidden; text-overflow: ellipsis; }
-        .t-tabs a:hover { color: var(--t-ink); }
-        .t-tabs a.on { color: var(--t-ink); background: var(--t-bg2); }
-        .t-logo { color: var(--t-acc); margin-right: 4px; }
-        .t-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; }
-        .t-name { color: var(--t-ink); }
-        .t-model { color: var(--t-acc); }
         .t-dim, .t-foot, .t-turn-foot { color: var(--t-dim); }
         .t-acc { color: var(--t-acc); }
         .t-warn { color: var(--t-warn); }
         .t-red { color: var(--t-red); }
         .t-green { color: var(--t-green); }
-        .t-tag { color: var(--t-green); }
         .t-grow { flex: 1; }
         .t-btn { all: unset; cursor: pointer; color: var(--t-dim); text-decoration: underline dotted; text-underline-offset: 3px; }
         .t-btn:hover { color: var(--t-ink); }
@@ -310,17 +325,11 @@ class SessionsTab extends LitElement {
             background: none; border: 0; padding: 0; box-shadow: none; font: inherit; }
         .t-btn:focus-visible { outline: 1px solid var(--t-acc); }
         .t-btn[disabled] { opacity: .5; cursor: default; }
-        .term .t-select { font: inherit; color: var(--t-dim); background: var(--t-bg); border: 1px solid var(--t-line); border-radius: 6px;
-            padding: 0 4px; width: auto; flex: none; box-shadow: none; }
         .t-inline { display: inline-flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
         .t-inline input:not([type=checkbox]) { font: inherit; color: var(--t-ink); background: var(--t-bg2); border: 1px solid var(--t-line);
             border-radius: 4px; padding: 0 6px; width: auto; }
         .t-inline label { display: inline-flex; gap: 4px; align-items: center; }
         .t-err { color: var(--t-red); }
-        .t-goal { padding: 6px 12px; border-bottom: 1px solid var(--t-line); background: var(--t-bg2); }
-        .t-goal-row { display: flex; gap: 10px; align-items: baseline; }
-        .t-goal-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--t-ink); }
-        .t-goal-text.folded { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .t-log { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 6px; }
         .t-you { display: flex; gap: 8px; margin-top: 12px; padding: 6px 10px; background: var(--t-bg2); border-radius: 6px; }
         .t-you:first-child { margin-top: 0; }
@@ -362,10 +371,6 @@ class SessionsTab extends LitElement {
         .t-push .t-num { font: inherit; width: 6em; color: var(--t-ink); background: var(--t-bg); border: 1px solid var(--t-line);
             border-radius: 6px; padding: 2px 6px; }
         /* Dragging files over the console: it says where they go. */
-        .term { position: relative; }
-        .t-dropzone { position: absolute; inset: 8px; z-index: 5; pointer-events: none; display: grid; place-items: center;
-            border: 2px dashed var(--t-acc); border-radius: 8px; background: color-mix(in srgb, var(--t-bg) 94%, transparent);
-            color: var(--t-acc); font-size: 15px; text-align: center; }
         .t-file { color: var(--t-acc); position: relative; text-decoration: none; }
         .t-file.failed { color: var(--t-red); }
         .t-reply a.t-dl { color: var(--t-acc); text-decoration: underline dotted; text-underline-offset: 3px; cursor: pointer; }
@@ -391,7 +396,6 @@ class SessionsTab extends LitElement {
         .term .t-area { all: unset; flex: 1; min-width: 0; box-sizing: border-box; width: 100%; color: var(--t-ink); font: inherit;
             white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; resize: none; caret-color: var(--t-acc); }
         .term .t-area::placeholder { color: var(--t-dim); opacity: .8; }
-        .t-goal .t-area { border: 1px solid var(--t-line); border-radius: 6px; padding: 6px 8px; margin: 4px 0; }
         .t-foot { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
     `];
 
@@ -696,46 +700,50 @@ class SessionsTab extends LitElement {
     /** The open session, filling the desk's window: its tabs, its numbers and goal, the log (which scrolls), the prompt. */
     _session(s) {
         const busy = working(s);
-        return html`<div class="term" style=${this._fillOk ? '' : 'height:720px'}
+        return html`<div class="sess" style=${this._fillOk ? '' : 'height:720px'}
                 @dragover=${e => this._dragOver(e)} @drop=${e => this._drop(e, s)}>
-            ${this._dragging ? html`<div class="t-dropzone">Drop to attach<br>images, PDFs, Word and text files</div>` : nothing}
-            <header class="t-head">
+            ${this._dragging ? html`<div class="s-dropzone">Drop to attach<br>images, PDFs, Word and text files</div>` : nothing}
+            <header class="s-head">
                 ${this._termTabs(s)}
-                <div class="t-meta">
-                    ${this._editing === 'name' ? html`<form class="t-inline" @submit=${e => this._rename(e, s)}>
+                <div class="s-meta">
+                    ${this._editing === 'name' ? html`<form class="s-inline" @submit=${e => this._rename(e, s)}>
                         <input name="name" required maxlength="80" .value=${s.name} aria-label="Name">
-                        <button class="t-btn" type="submit">rename</button>
-                        <button class="t-btn" type="button" @click=${() => { this._editing = null; }}>cancel</button></form>`
-                        : html`<b class="t-name">${s.name}</b>`}
-                    <span class="t-dim">${s.repo}</span>
+                        <button class="sm primary" type="submit">Rename</button>
+                        <button class="sm quiet" type="button" @click=${() => { this._editing = null; }}>Cancel</button></form>`
+                        : html`<h2 class="s-name">${s.name}</h2>`}
+                    <span class="s-dim">${s.repo}</span>
                     ${this._numbers(s)}
-                    ${this._tagsOf(s)}
-                    ${s.link ? html`<span class="t-dim">linked to <a href="#" @click=${e => { e.preventDefault(); this._openLink(s.link); }}>${s.link.title || s.link.ref}</a>
-                        <button class="t-btn" @click=${() => this._act('unlink', { session: s.id }, 'Couldn\'t unlink it')}>unlink</button></span>`
-                        : html`<button class="t-btn" @click=${() => this._linkTodo(s)}>link a todo</button>`}
-                    <span class="t-grow"></span>
-                    ${s.pr ? html`<a href=${s.pr} target="_blank" rel="noopener" title=${s.branch ? `Branch ${s.branch}` : ''}>PR</a>` : nothing}
-                    ${this._github ? html`<button class="t-btn" ?disabled=${busy || !!this._busy} title=${busy ? 'When this turn is done' : 'Read the commits, then push them to GitHub'}
-                        @click=${() => this._pushPreview(s)}>${this._busy === 'push-preview' ? 'reading…' : 'push'}</button>` : nothing}
-                    ${s.terminal ? html`<span class="t-warn" title="house-elves resume: the desk waits until you exit Claude Code there">in a terminal</span>`
-                        : (s.agent ?? 'claude') === 'claude' && s.session ? html`<button class="t-btn" ?disabled=${busy}
-                        title=${busy ? 'When this turn is done' : 'Carry on in Claude Code in a terminal'}
-                        @click=${() => { this._breakout = this._breakout === s.id ? null : s.id; }}>break out</button>` : nothing}
-                    ${this._editing ? nothing : html`<button class="t-btn" @click=${() => { this._editing = 'name'; }}>rename</button>`}
-                    <button class="t-btn" @click=${() => this._act('archive', { session: s.id, archived: !s.archived }, 'Couldn\'t archive it')}>
-                        ${s.archived ? 'unarchive' : 'archive'}</button>
-                    <button class="t-btn" ?disabled=${busy || !!this._busy} title=${busy ? 'Stop it first' : 'The desk asks you first'}
-                        @click=${() => this._delete(s)}>delete</button>
                 </div>
-                ${this._error ? html`<div class="t-err" role="alert">⚠ ${this._error} <button class="t-btn" @click=${() => { this._error = null; }}>dismiss</button></div>` : nothing}
+                <div class="s-meta">
+                    ${this._tagsOf(s)}
+                    ${s.link ? html`<span class="s-dim">Linked to <a href="#" @click=${e => { e.preventDefault(); this._openLink(s.link); }}>${s.link.title || s.link.ref}</a></span>
+                        <button class="sm quiet" @click=${() => this._act('unlink', { session: s.id }, 'Couldn\'t unlink it')}>Unlink</button>`
+                        : html`<button class="sm quiet" @click=${() => this._linkTodo(s)}>Link a todo</button>`}
+                    <span class="s-grow"></span>
+                    ${s.pr ? html`<a class="btn sm quiet" href=${s.pr} target="_blank" rel="noopener" title=${s.branch ? `Branch ${s.branch}` : ''}>${prLabel(s.pr)}</a>` : nothing}
+                    ${this._github ? html`<button class="sm" ?disabled=${busy || !!this._busy} title=${busy ? 'When this turn is done' : 'Read the commits, then push them to GitHub'}
+                        @click=${() => this._pushPreview(s)}>${this._busy === 'push-preview' ? html`${spinner}Reading…` : 'Push'}</button>` : nothing}
+                    ${s.terminal ? html`<span class="chip warn" title="house-elves resume: the desk waits until you exit Claude Code there">In a terminal</span>`
+                        : (s.agent ?? 'claude') === 'claude' && s.session ? html`<button class="sm quiet" ?disabled=${busy}
+                        title=${busy ? 'When this turn is done' : 'Carry on in Claude Code in a terminal'}
+                        @click=${() => { this._breakout = this._breakout === s.id ? null : s.id; }}>Break out</button>` : nothing}
+                    ${this._editing ? nothing : html`<button class="sm quiet" @click=${() => { this._editing = 'name'; }}>Rename</button>`}
+                    <button class="sm quiet" @click=${() => this._act('archive', { session: s.id, archived: !s.archived }, 'Couldn\'t archive it')}>
+                        ${s.archived ? 'Unarchive' : 'Archive'}</button>
+                    <button class="sm quiet danger" ?disabled=${busy || !!this._busy} title=${busy ? 'Stop it first' : 'The desk asks you first'}
+                        @click=${() => this._delete(s)}>Delete</button>
+                </div>
+                ${this._error ? html`<div class="error s-error" role="alert">${this._error} <button class="sm quiet" @click=${() => { this._error = null; }}>Dismiss</button></div>` : nothing}
             </header>
             ${this._goal(s)}
-            <div class="t-log" aria-live="polite" @scroll=${e => { this._stick = e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight < 40; }}>
-                ${(s.turns ?? []).map((t, i, all) => html`${this._turn(t, i)}${this._asks(s, t)}${this._pushes(s, t, all[i + 1])}`)}
+            <div class="term">
+                <div class="t-log" aria-live="polite" @scroll=${e => { this._stick = e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight < 40; }}>
+                    ${(s.turns ?? []).map((t, i, all) => html`${this._turn(t, i)}${this._asks(s, t)}${this._pushes(s, t, all[i + 1])}`)}
+                </div>
+                ${this._pushBox(s, busy)}
+                ${this._breakoutBox(s)}
+                ${this._compose(s, busy)}
             </div>
-            ${this._pushBox(s, busy)}
-            ${this._breakoutBox(s)}
-            ${this._compose(s, busy)}
         </div>`;
     }
 
@@ -985,19 +993,18 @@ class SessionsTab extends LitElement {
         const tags = this._allTags(sessions);
         const filter = tags.includes(this._filter) ? this._filter : '';
         const shown = sessions.filter(x => (this._archived || !x.archived || x === s) && (tagged(x, filter) || x === s));
-        return html`<nav class="t-tabs" aria-label="Sessions">
-            <span class="t-logo">✻</span>
-            ${shown.map(x => html`<a href="#" class=${x === s ? 'on' : ''} title=${(x.prompt ?? '').split('\n')[0]}
+        return html`<nav class="s-tabs" aria-label="Sessions">
+            ${shown.map(x => html`<a href="#" class=${x.archived ? 'archived' : ''} title=${(x.prompt ?? '').split('\n')[0]}
                 aria-current=${x === s ? 'page' : 'false'} @click=${e => { e.preventDefault(); this._go(`s/${x.id}`); }}>
-                ${working(x) ? html`<span class="t-spin">✻</span>` : nothing}${x.name}</a>`)}
-            <button class="t-btn" @click=${() => this._go('new')}>+ new</button>
-            <span class="t-grow"></span>
-            ${tags.length ? html`<select class="t-select" aria-label="Show sessions tagged" @change=${e => this._setFilter(e.target.value)}>
-                <option value="" ?selected=${filter === ''}>all tags</option>
+                ${working(x) ? spinner : html`<span class="dot"></span>`}<span class="n">${x.name}</span></a>`)}
+            <button class="sm quiet" @click=${() => this._go('new')}>+ New</button>
+            <span class="s-grow"></span>
+            ${tags.length ? html`<select class="s-select" aria-label="Show sessions tagged" @change=${e => this._setFilter(e.target.value)}>
+                <option value="" ?selected=${filter === ''}>All tags</option>
                 ${tags.map(t => html`<option value=${t} ?selected=${filter === t}>${t}</option>`)}</select>` : nothing}
-            ${sessions.some(x => x.archived) ? html`<button class="t-btn" @click=${() => { this._archived = !this._archived; }}>
-                ${this._archived ? 'hide archived' : 'archived'}</button>` : nothing}
-            <button class="t-btn" @click=${() => elf.settings()}>settings</button>
+            ${sessions.some(x => x.archived) ? html`<button class="sm quiet" @click=${() => { this._archived = !this._archived; }}>
+                ${this._archived ? 'Hide archived' : 'Archived'}</button>` : nothing}
+            <button class="sm quiet" @click=${() => elf.settings()}>Settings</button>
         </nav>`;
     }
 
@@ -1005,14 +1012,14 @@ class SessionsTab extends LitElement {
     _tagsOf(s) {
         const mine = s.tags ?? [];
         if (!this._tagging) {
-            return html`${mine.map(t => html`<span class="t-tag">#${t}</span>`)}
-                ${this._tags.length || mine.length ? html`<button class="t-btn" @click=${() => { this._tagging = true; }}>${mine.length ? 'tags' : 'add tags'}</button>` : nothing}`;
+            return html`${mine.map(t => html`<span class="chip">#${t}</span>`)}
+                ${this._tags.length || mine.length ? html`<button class="sm quiet" @click=${() => { this._tagging = true; }}>${mine.length ? 'Tags' : 'Add tags'}</button>` : nothing}`;
         }
         const choices = [...new Set([...this._tags, ...mine])];
-        return html`<form class="t-inline" @submit=${e => this._saveTags(e, s)}>
+        return html`<form class="s-inline" @submit=${e => this._saveTags(e, s)}>
             ${choices.map(t => html`<label><input type="checkbox" name="tag" value=${t} ?checked=${mine.includes(t)}>${t}</label>`)}
-            <button class="t-btn" type="submit">save</button>
-            <button class="t-btn" type="button" @click=${() => { this._tagging = false; }}>cancel</button>
+            <button class="sm primary" type="submit">Save</button>
+            <button class="sm quiet" type="button" @click=${() => { this._tagging = false; }}>Cancel</button>
         </form>`;
     }
 
@@ -1028,32 +1035,32 @@ class SessionsTab extends LitElement {
     _goal(s) {
         const edited = !!s.goal;
         if (this._editing === 'goal') {
-            return html`<form class="t-goal" @submit=${e => this._saveGoal(e, s)}>
-                <div class="t-dim">goal: the agent gets it with every turn</div>
-                <textarea class="t-area" name="goal" required maxlength="20000" rows="4" .value=${s.goal || s.prompt}></textarea>
-                <div><button class="t-btn" type="submit">save goal</button>
-                    <button class="t-btn" type="button" @click=${() => { this._editing = null; }}>cancel</button></div>
+            return html`<form class="goal" @submit=${e => this._saveGoal(e, s)}>
+                <div class="label">Goal: the agent gets it with every turn</div>
+                <textarea name="goal" required maxlength="20000" rows="4" .value=${s.goal || s.prompt}></textarea>
+                <div class="s-inline"><button class="sm primary" type="submit">Save goal</button>
+                    <button class="sm quiet" type="button" @click=${() => { this._editing = null; }}>Cancel</button></div>
             </form>`;
         }
-        return html`<div class="t-goal">
-            <div class="t-goal-row"><span class="t-acc">goal</span>${edited ? html`<span class="t-dim">edited ${ago(s.goalEdited)}</span>` : nothing}
-                <span class="t-grow"></span>
-                <button class="t-btn" @click=${() => { this._goalOpen = !this._goalOpen; }} aria-expanded=${this._goalOpen}>${this._goalOpen ? 'fold' : 'show all'}</button>
-                <button class="t-btn" @click=${() => { this._editing = 'goal'; }}>edit</button></div>
-            <div class="t-goal-text ${this._goalOpen ? '' : 'folded'}">${s.goal || s.prompt}</div>
-            ${edited && this._goalOpen ? html`<details><summary class="t-dim">the first message</summary>
-                <div class="t-goal-text">${s.prompt}</div></details>` : nothing}
+        return html`<div class="goal">
+            <div class="label"><span>Goal${edited ? html` · edited ${ago(s.goalEdited)}` : nothing}</span>
+                <span class="s-inline">
+                <button class="sm quiet" @click=${() => { this._goalOpen = !this._goalOpen; }} aria-expanded=${this._goalOpen}>${this._goalOpen ? 'Fold' : 'Show all'}</button>
+                <button class="sm quiet" @click=${() => { this._editing = 'goal'; }}>Edit</button></span></div>
+            <div class="goal-text ${this._goalOpen ? '' : 'folded'}">${s.goal || s.prompt}</div>
+            ${edited && this._goalOpen ? html`<details><summary class="s-dim">The first message</summary>
+                <div class="goal-text">${s.prompt}</div></details>` : nothing}
         </div>`;
     }
 
     /** The model, then what it has cost, how long it has worked and how full its context is. */
     _numbers(s) {
         const n = totals(s);
-        return html`<span class="t-model" title=${n.model ?? ''}>${n.model ? modelName(n.model) : agentName(s.agent)}</span>
-            ${n.cost !== null ? html`<span class="t-dim" title="What its turns have cost, at list price">$${n.cost.toFixed(2)}</span>` : nothing}
-            ${n.bobcoins !== null ? html`<span class="t-dim">${n.bobcoins.toFixed(2)} Bobcoins</span>` : nothing}
-            ${n.ms !== null ? html`<span class="t-dim" title="How long the agent has worked, over all its turns">${took(n.ms)}</span>` : nothing}
-            ${n.context !== null ? html`<span class=${n.context >= 80 ? 't-warn' : 't-dim'}
+        return html`<span class="chip run" title=${n.model ?? ''}>${n.model ? modelName(n.model) : agentName(s.agent)}</span>
+            ${n.cost !== null ? html`<span class="s-dim" title="What its turns have cost, at list price">$${n.cost.toFixed(2)}</span>` : nothing}
+            ${n.bobcoins !== null ? html`<span class="s-dim">${n.bobcoins.toFixed(2)} Bobcoins</span>` : nothing}
+            ${n.ms !== null ? html`<span class="s-dim" title="How long the agent has worked, over all its turns">${took(n.ms)}</span>` : nothing}
+            ${n.context !== null ? html`<span class=${n.context >= 80 ? 'chip warn' : 's-dim'}
                 title="How full the model's context window is after the last turn">${n.context}% context</span>` : nothing}
             ${this._contextButtons(s, n)}`;
     }
@@ -1064,10 +1071,10 @@ class SessionsTab extends LitElement {
      */
     _contextButtons(s, n) {
         if (!s.session || working(s)) return nothing;
-        return html`<button class="t-btn" ?disabled=${!!this._busy} @click=${() => this._compact(s)}
-                title="The agent writes a handover of this conversation (one turn), and your next message starts a new conversation with only that">compact</button>
-            <button class="t-btn" ?disabled=${!!this._busy} @click=${() => this._clear(s)}
-                title="Your next message starts a new conversation. The chat here and the clone stay as they are">clear</button>`;
+        return html`<button class="sm quiet" ?disabled=${!!this._busy} @click=${() => this._compact(s)}
+                title="The agent writes a handover of this conversation (one turn), and your next message starts a new conversation with only that">Compact</button>
+            <button class="sm quiet" ?disabled=${!!this._busy} @click=${() => this._clear(s)}
+                title="Your next message starts a new conversation. The chat here and the clone stay as they are">Clear</button>`;
     }
 
     async _compact(s) {
