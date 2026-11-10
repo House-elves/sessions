@@ -750,7 +750,7 @@ public class Sessions implements Callable<Integer> {
     static JsonNode pushPreview(Config config, JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
         String token = token(config);
-        if (!in.path("newRepo").asText("").isEmpty()) return previewNew(config, s, token, in.path("newRepo").asText().strip());
+        if (!in.path("newRepo").asText("").isEmpty()) return previewNew(config, s, token, in.path("newRepo").asText().strip(), in);
         return preview(config, s, token, in.path("pr").asInt(0));
     }
 
@@ -802,7 +802,7 @@ public class Sessions implements Callable<Integer> {
      * yours to push to and empty. Work on the session's repo goes as one commit with all the clone's files and none of
      * the repo's history; a history of the agent's own goes as it is. {missing} when target isn't on GitHub yet.
      */
-    static ObjectNode previewNew(Config config, ObjectNode s, String token, String target) throws Exception {
+    static ObjectNode previewNew(Config config, ObjectNode s, String token, String target, JsonNode in) throws Exception {
         harvest(s);
         if (running(s)) throw new IllegalStateException("It's still working: push when this turn is done");
         if (!runnerAtLeast(0, 57)) throw new IllegalStateException("Pushing to a new repository needs runner 0.57.0 or later: update the desk");
@@ -813,10 +813,13 @@ public class Sessions implements Callable<Integer> {
         if (git == null || !SHA.matcher(git.path("to").asText("")).matches()) {
             throw new IllegalStateException("There are no commits to push yet: ask the agent to commit its work");
         }
-        boolean own = git.path("unrelated").asBoolean();
+        // A history of its own goes as it is, or as one commit when you ask (its steps' messages stay here).
+        boolean own = git.path("unrelated").asBoolean() && !in.path("oneCommit").asBoolean();
+        String message = oneLine(in.path("message").asText(""), 200);
+        if (message.isEmpty()) message = oneLine(s.path("name").asText(), 200);
         ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("repo", s.path("repo").asText())
                 .put("as", config.githubLogin).put("newRepo", target).put("headRepo", target).put("to", git.path("to").asText())
-                .put("squash", !own);
+                .put("squash", !own).put("unrelated", git.path("unrelated").asBoolean()).put("message", message);
         out.set("owners", owners(config, token));
         String info = run(List.of("gh", "api", "repos/" + target, "--jq", "{push: .permissions.push, private, url: .html_url, branch: .default_branch}"), token);
         if (info == null || info.isBlank()) return out.put("missing", true);
@@ -835,10 +838,9 @@ public class Sessions implements Callable<Integer> {
             commits.addAll((ArrayNode) had);
             out.put("count", git.path("count").asInt(had.size())).put("diffstat", git.path("diffstat").asText(""));
         } else {
-            JsonNode last = had.isEmpty() ? null : had.get(had.size() - 1);
-            commits.addObject().put("sha", git.path("to").asText()).put("subject", last == null ? oneLine(s.path("name").asText(), 200)
-                    : last.path("subject").asText());
-            out.put("count", 1);
+            commits.addObject().put("sha", git.path("to").asText()).put("subject", message);
+            out.put("count", 1).put("was", git.path("count").asInt(had.size()));
+            if (git.path("unrelated").asBoolean()) out.put("diffstat", git.path("diffstat").asText(""));
         }
         return out.put("title", oneLine(s.path("name").asText(), 200));
     }
@@ -909,7 +911,7 @@ public class Sessions implements Callable<Integer> {
     static JsonNode pushNew(Config config, JsonNode in) throws Exception {
         ObjectNode s = load(in.path("session").asText(""));
         String token = token(config);
-        ObjectNode p = previewNew(config, s, token, in.path("newRepo").asText("").strip());
+        ObjectNode p = previewNew(config, s, token, in.path("newRepo").asText("").strip(), in);
         if (p.path("missing").asBoolean()) throw new IllegalStateException(p.path("newRepo").asText() + " isn't on GitHub: create it first");
         if (!in.path("as").asText("").equalsIgnoreCase(config.githubLogin)) throw new IllegalArgumentException("Not the account in Sessions' settings");
         int n = p.path("count").asInt();
@@ -920,7 +922,7 @@ public class Sessions implements Callable<Integer> {
         ObjectNode push = JSON.createObjectNode().put("repo", s.path("repo").asText()).put("number", 0)
                 .put("slot", s.path("id").asText()).put("headRepo", p.path("headRepo").asText())
                 .put("headRef", p.path("headRef").asText()).put("from", p.path("to").asText()).put("to", p.path("to").asText())
-                .put("newRepo", true).put("squash", p.path("squash").asBoolean());
+                .put("newRepo", true).put("squash", p.path("squash").asBoolean()).put("message", p.path("message").asText());
         s.putObject("pendingPush").put("to", p.path("to").asText()).put("target", p.path("target").asText())
                 .put("headRepo", p.path("headRepo").asText()).put("headRef", p.path("headRef").asText())
                 .put("newRepo", true).put("at", Instant.now().toString());

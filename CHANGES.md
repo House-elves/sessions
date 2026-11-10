@@ -1,6 +1,11 @@
 # What's new
 
 
+## 0.18.4
+
+- A history of the agent's own can go to the new repository as one commit, with a message you give, rather than
+  all its steps.
+
 ## 0.18.3
 
 - push no longer needs another message to the agent first when its last report was from before runner 0.57: the

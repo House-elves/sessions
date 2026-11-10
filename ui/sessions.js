@@ -763,11 +763,12 @@ class SessionsTab extends LitElement {
     // ---- pushing the session's work: read it, then the desk's bar asks, then the runner pushes and a draft PR opens ----
 
     /** What a push to a new repository would send (it must be yours and empty), or that it isn't on GitHub yet. */
-    async _pushPreviewNew(s, target) {
+    async _pushPreviewNew(s, target, how = {}) {
         this._pushed = null;
         this._pushDiff = false;
-        let p = await this._act('push-preview', { session: s.id, newRepo: target }, 'Couldn\'t look at it');
-        if (p?.readAgain) p = p.slotGit?.status === 200 ? await this._act('push-preview', { session: s.id, newRepo: target }, 'Couldn\'t look at it') : null;
+        const params = { session: s.id, newRepo: target, ...(how.oneCommit ? { oneCommit: 'true', message: how.message ?? '' } : {}) };
+        let p = await this._act('push-preview', params, 'Couldn\'t look at it');
+        if (p?.readAgain) p = p.slotGit?.status === 200 ? await this._act('push-preview', params, 'Couldn\'t look at it') : null;
         if (p?.readAgain) p = null;
         if (p && p.session === s.id) this._push = { ...p, chosen: true };
     }
@@ -926,8 +927,16 @@ class SessionsTab extends LitElement {
         const n = p.count ?? (p.commits ?? []).length;
         return html`<div class="t-push">
             <div><b>Push to the new repository</b> <a href=${p.url} target="_blank" rel="noopener">${p.target}</a>
-                <span class="t-dim">${p.squash ? `as one commit: all the clone's files, with none of ${p.repo}'s history`
+                <span class="t-dim">${p.squash ? (p.unrelated ? 'as one commit: all the clone\'s files, its steps\' messages stay here' : `as one commit: all the clone's files, with none of ${p.repo}'s history`)
                     : `the agent's own history, as it is`}${p.private ? ' · private' : ' · public'}. The session then moves to ${p.newRepo}.</span></div>
+            ${p.unrelated ? html`<div class="t-row"><span class="t-dim">as</span>
+                <select class="t-sel" aria-label="Its history" ?disabled=${busy || !!this._busy}
+                    @change=${e => this._pushPreviewNew(s, p.newRepo, e.target.value === 'one' ? { oneCommit: true, message: p.message } : {})}>
+                    <option value="all" ?selected=${!p.squash}>its ${count(p.squash ? p.was : n, 'commit')}, as they are</option>
+                    <option value="one" ?selected=${p.squash}>one commit</option></select>
+                ${p.squash ? html`<input class="t-cmd" maxlength="200" aria-label="The commit's message" .value=${p.message ?? ''}
+                    @change=${e => this._pushPreviewNew(s, p.newRepo, { oneCommit: true, message: e.target.value.trim() })}>` : nothing}
+                </div>` : nothing}
             ${(p.commits ?? []).slice(-20).map(c => html`<div class="t-dim">${c.sha.slice(0, 7)} <span class="t-ink">${c.subject}</span></div>`)}
             ${(p.commits ?? []).length > 20 ? html`<div class="t-dim">… and ${(p.commits.length - 20)} more before them</div>` : nothing}
             ${p.diffstat ? html`<pre class="t-stat">${p.diffstat}</pre>` : nothing}
@@ -941,7 +950,8 @@ class SessionsTab extends LitElement {
     async _doPushNew(s, p) {
         const n = p.count ?? (p.commits ?? []).length;
         const r = await this._act('push-new', { session: s.id, newRepo: p.newRepo, to: p.to, as: p.as, target: p.target,
-            commits: `${n} commit${n === 1 ? '' : 's'}` }, 'Couldn\'t push it');
+            commits: `${n} commit${n === 1 ? '' : 's'}`, ...(p.unrelated && p.squash ? { oneCommit: 'true', message: p.message ?? '' } : {}) },
+            'Couldn\'t push it');
         if (!r?.push) return;
         const x = r.push;
         const done = await this._act('push-done', { session: s.id, to: p.to, status: x.status ?? 0,
