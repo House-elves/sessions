@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.17.3
+version: 0.18.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -26,6 +26,11 @@ writes:
     branch on GitHub (session/<its name>, on the repo, or on your fork when you can't push there), with your gh
     account, and the first push opens a draft PR on the repo. Or, if you pick one of the repo's open PRs instead, they
     replace what's on that PR's branch. The agent itself never has GitHub credentials.
+  - When you create a repository from it (and confirm in the desk's bar), a new repository on GitHub, yours or your
+    organization's, private or public as you choose, with your gh account.
+  - When you push a session to a new repository instead (it must be empty, and you confirm in the desk's bar), the
+    clone's files go to its default branch with your gh account: as one commit with none of the old repo's history, or
+    the agent's own history when it started a new project. The session then moves to that repository.
   - When the agent asks you to close, comment on or merge one of the session's repo's issues or PRs (it has no GitHub
     access itself), and you click it and confirm in the desk's bar, it does that on GitHub with your gh account.
   - The variables you add in its settings (an API key for what a session builds, say), on this machine only. Every
@@ -159,6 +164,36 @@ actions:
       session: {pattern: "s[0-9]{10,16}"}
       # One of the repo's open PRs to push onto instead of a branch of its own (before the first push).
       pr: {kind: int, optional: true}
+      # Or a new, empty repository of yours to push to, which the session then moves to.
+      newRepo: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", max: 140, optional: true}
+  push-new:
+    label: Push a session's work to a new repository, and move the session there
+    args: [--action=push-new]
+    confirm: "Push {commits} to the new repository {target} on GitHub, as {as}? The session then moves to {newRepo}: its next turns and pushes are there."
+    params:
+      session: {pattern: "s[0-9]{10,16}"}
+      newRepo: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", max: 140}
+      to: {pattern: "[0-9a-f]{40}", max: 40}
+      as: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}", max: 39}
+      target: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}:[A-Za-z0-9][A-Za-z0-9._/-]{0,100}", max: 250}
+      commits: {pattern: "[0-9]{1,6} commits?", max: 14}
+  repo-owners:
+    label: Who can own a new repository
+    args: [--action=repo-owners]
+    ask: false
+    params: {}
+  repo-create:
+    label: Create a repository on GitHub
+    args: [--action=repo-create]
+    confirm: "Create the {visibility} repository {owner}/{name} on GitHub, as {as}?"
+    params:
+      owner: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}", max: 39}
+      name: {pattern: "[A-Za-z0-9._-]{1,100}", max: 100}
+      visibility: {pattern: "private|public", max: 7}
+      as: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}", max: 39}
+      description: {pattern: "[^\\n]{0,350}", max: 350, optional: true}
+      # With a README, to start a session on (an empty one is to push a session to).
+      init: {pattern: "true|false", max: 5, optional: true}
   push:
     label: Push a session's commits to GitHub
     args: [--action=push]
@@ -190,6 +225,10 @@ actions:
       to: {pattern: "[0-9a-f]{40}", max: 40}
       status: {kind: int}
       error: {pattern: "[\\s\\S]*", max: 4000, optional: true}
+      # A push to a new repository: the commit it pushed, and where the runner moved the clone (or why it didn't).
+      pushed: {pattern: "[0-9a-f]{40}", max: 40, optional: true}
+      moved: {pattern: "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", max: 140, optional: true}
+      notMoved: {pattern: "[\\s\\S]*", max: 1000, optional: true}
   # ---- what the agent asks you to do on GitHub, on the session's repo: each waits for your click in the desk's bar ----
   gh-look:
     label: Read an issue or PR the agent asks about

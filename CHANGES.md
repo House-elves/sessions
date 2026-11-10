@@ -1,5 +1,15 @@
 # What's new
 
+
+## 0.18.0
+
+- New: push a session to a new repository. In the push box, choose "a new repository of yours…", give its owner (you
+  or one of your organizations) and name, and create it there if it isn't on GitHub yet (private or public). The
+  clone's files go as one commit with none of the old repo's history, or as the agent's own history when it started a
+  new project. The session then moves to the new repository: its next turns and pushes go there. Needs runner 0.57.0.
+- New: "Or create a new repository…" when you start a session, to start it on a repository that isn't there yet.
+- The agent knows about this, so it tells you to push to a new repository rather than making a bundle for you.
+
 ## 0.17.3
 
 - **push** after a session's PR was merged or closed on GitHub goes to a new branch and draft PR (its branch name with -2, -3…),

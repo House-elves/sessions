@@ -195,6 +195,7 @@ class SessionsTab extends LitElement {
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
         _files: { state: true }, _sayMode: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
         _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true }, _look: { state: true }, _listening: { state: true },
+        _newRepo: { state: true }, _repoMade: { state: true },
     };
 
     static styles = [shared, markdownStyles, css`
@@ -580,6 +581,7 @@ class SessionsTab extends LitElement {
                 <span class="field-hint">${repos.length ? 'Type any repo, or pick one from your GitHub board and your sessions.'
                     : 'Type a repo you can read, like owner/name.'}</span></label>
             <datalist id="repo-list">${repos.map(r => html`<option value=${r}></option>`)}</datalist>
+            ${this._newRepoForSession()}
             ${this._tags.length ? html`<fieldset class="tagbox"><legend>Tags</legend>${this._tags.map(t => html`<label>
                 <input type="checkbox" name="tag" value=${t} ?checked=${t === this._filter}>${t}</label>`)}</fieldset>` : nothing}
             <label>Coding agent <select name="agent" required>
@@ -601,6 +603,29 @@ class SessionsTab extends LitElement {
                 <button class="quiet" type="button" @click=${() => this._go('')}>Cancel</button>
             </div>
         </form>`;
+    }
+
+    /** A new repository to start the session on: created with a README (you confirm in the desk's bar), then picked. */
+    _newRepoForSession() {
+        const r = this._newRepo?.session === 'new' ? this._newRepo : null;
+        const made = this._repoMade;
+        return html`<div class="tagbox new-repo">
+            ${made ? html`<span class="chip ok">Created ${made}</span>` : nothing}
+            ${r ? html`${this._repoForm(r, x => this._createForSession(x), this._busy === 'repo-create' ? 'creating…' : 'create it')}
+                <span class="field-hint">A new repository on GitHub, with a README, as ${r.as ?? 'you'}. You confirm in the desk's bar.</span>`
+                : html`<button type="button" class="sm quiet" ?disabled=${!!this._busy} @click=${() => this._startNewRepo({ id: 'new' })}>
+                    Or create a new repository…</button>`}
+        </div>`;
+    }
+
+    async _createForSession(x) {
+        const repo = await this._act('repo-create', { owner: x.owner, name: x.name, visibility: x.visibility, as: x.as ?? x.owner, init: 'true' },
+            'Couldn\'t create it');
+        if (!repo?.repo) return;
+        this._newRepo = null;
+        this._repoMade = repo.repo;
+        const box = this.renderRoot.querySelector('form.new input[name=repo]');
+        if (box) box.value = repo.repo;
     }
 
     /**
@@ -728,8 +753,55 @@ class SessionsTab extends LitElement {
 
     // ---- pushing the session's work: read it, then the desk's bar asks, then the runner pushes and a draft PR opens ----
 
+    /** What a push to a new repository would send (it must be yours and empty), or that it isn't on GitHub yet. */
+    async _pushPreviewNew(s, target) {
+        this._pushed = null;
+        this._pushDiff = false;
+        const p = await this._act('push-preview', { session: s.id, newRepo: target }, 'Couldn\'t look at it');
+        if (p && p.session === s.id) this._push = { ...p, chosen: true };
+    }
+
+    /** The owner and name of a new repository, and whether it's private: for a push, or for a new session. */
+    _repoForm(r, onSubmit, label) {
+        const owners = r.owners ?? [];
+        // Not a <form>: it also sits inside the new-session form.
+        const go = e => {
+            const box = e.target.closest('.repo-form');
+            const name = box.querySelector('[name=rname]');
+            if (!name.reportValidity()) return;
+            this._newRepo = { ...r, owner: box.querySelector('[name=rowner]').value, name: name.value.trim(),
+                visibility: box.querySelector('[name=rvis]').value };
+            onSubmit(this._newRepo);
+        };
+        return html`<div class="t-row t-inline repo-form" @keydown=${e => { if (e.key === 'Enter') { e.preventDefault(); go(e); } }}>
+            <select class="t-sel" name="rowner" aria-label="Owner">${owners.map(o => html`<option ?selected=${o === r.owner}>${o}</option>`)}</select>
+            <span class="t-dim">/</span>
+            <input name="rname" class="t-cmd" required maxlength="100" pattern="[A-Za-z0-9._\-]{1,100}" placeholder="new-repo"
+                aria-label="Repository name" spellcheck="false" autocomplete="off" .value=${r.name ?? ''}>
+            <select class="t-sel" name="rvis" aria-label="Who can see it">
+                <option value="private" ?selected=${r.visibility !== 'public'}>private</option>
+                <option value="public" ?selected=${r.visibility === 'public'}>public</option></select>
+            <button type="button" class="t-btn sm" ?disabled=${!!this._busy} @click=${go}>${label}</button>
+        </div>`;
+    }
+
+    async _startNewRepo(s) {
+        this._newRepo = { session: s.id, owners: [], visibility: 'private' };
+        const o = await this._act('repo-owners', {}, 'Couldn\'t read who can own it');
+        if (o) this._newRepo = { ...this._newRepo, owners: o.owners ?? [o.as], owner: o.as, as: o.as };
+    }
+
+    /** Creates the repository (you confirm in the desk's bar), then looks at the push again. */
+    async _createRepo(s, p) {
+        const [owner, name] = p.newRepo.split('/');
+        const r = await this._act('repo-create', { owner, name, visibility: this._newRepo?.visibility ?? 'private', as: p.as },
+            'Couldn\'t create it');
+        if (r?.repo) await this._pushPreviewNew(s, r.repo);
+    }
+
     async _pushPreview(s, pr) {
         this._pushed = null;
+        this._newRepo = null;
         this._pushDiff = false;
         const prs = this._push?.session === s.id ? this._push.prs : null;
         const p = await this._act('push-preview', { session: s.id, ...(pr ? { pr } : {}) }, 'Couldn\'t read its commits');
@@ -743,6 +815,12 @@ class SessionsTab extends LitElement {
         if (p.update || p.already || (p.pr && !p.prNumber)) return nothing;
         const pick = e => {
             const v = e.target.value;
+            if (v === 'newrepo') {
+                e.target.value = '';
+                this._push = { ...p, prs: p.prs, chosen: false, newRepoForm: true };
+                this._startNewRepo(s);
+                return;
+            }
             if (v === 'other') {
                 e.target.value = p.prNumber ?? '';
                 this._otherPr = true;
@@ -759,6 +837,7 @@ class SessionsTab extends LitElement {
                 ${mine.map(x => html`<option value=${x.number} ?selected=${p.prNumber === x.number}>PR #${x.number}: ${x.title}</option>`)}
                 ${p.prNumber && !mine.some(x => x.number === p.prNumber) ? html`<option value=${p.prNumber} selected>PR #${p.prNumber}: ${p.prTitle}</option>` : nothing}
                 <option value="other">another PR, by its number…</option>
+                <option value="newrepo">a new repository of yours…</option>
             </select>
             ${this._otherPr ? html`<form class="t-inline" @submit=${e => { e.preventDefault();
                     const n = Number(new FormData(e.target).get('n')); if (n > 0) { this._otherPr = false; this._pushPreview(s, n); } }}>
@@ -776,6 +855,7 @@ class SessionsTab extends LitElement {
         }
         const p = this._push?.session === s.id ? this._push : null;
         if (!p) return nothing;
+        if (p.unrelated || p.newRepoForm || p.newRepo) return this._pushNewBox(s, p, busy);
         const n = (p.commits ?? []).length;
         const unchosen = !p.update && !p.already && !p.chosen && (p.prs ?? []).length > 0 && !(p.pr && !p.prNumber);
         return html`<div class="t-push">
@@ -797,6 +877,61 @@ class SessionsTab extends LitElement {
                 <button class="t-btn" @click=${() => { this._push = null; this._otherPr = false; }}>${p.already ? 'close' : 'cancel'}</button>
             </div>
         </div>`;
+    }
+
+    /**
+     * To a new repository: pick it (yours or your organization's), create it if it isn't there, read what goes, push.
+     * The session then moves to it.
+     */
+    _pushNewBox(s, p, busy) {
+        const close = html`<button class="t-btn" @click=${() => { this._push = null; this._newRepo = null; }}>cancel</button>`;
+        const r = this._newRepo?.session === s.id ? this._newRepo : null;
+        if (!p.newRepo) {
+            return html`<div class="t-push">
+                ${p.unrelated ? html`<div><b>A history of its own</b> <span class="t-dim">the agent's ${count(p.count, 'commit')} share no history with
+                    ${p.repo}, so they can't go to a branch there. Push them to a new repository of yours: the session moves there.</span></div>`
+                    : html`<div><b>To a new repository</b> <span class="t-dim">the clone's files as one commit, with none of ${p.repo}'s history.
+                    The session then moves to it.</span></div>`}
+                ${r ? this._repoForm(r, x => this._pushPreviewNew(s, `${x.owner}/${x.name}`), 'look')
+                    : html`<div class="t-row"><button class="t-btn t-acc" ?disabled=${busy || !!this._busy} @click=${() => this._startNewRepo(s)}>choose the repository…</button></div>`}
+                <div class="t-row">${close}</div></div>`;
+        }
+        if (p.missing) {
+            return html`<div class="t-push">
+                <div><b>${p.newRepo}</b> <span class="t-dim">isn't on GitHub yet. Create it (empty, ${this._newRepo?.visibility ?? 'private'}), then push to it.</span></div>
+                <div class="t-row"><button class="t-btn t-acc" ?disabled=${busy || !!this._busy} @click=${() => this._createRepo(s, p)}>
+                    ${this._busy === 'repo-create' ? 'creating…' : `create ${p.newRepo}`}</button>
+                    <button class="t-btn" @click=${() => { this._push = { ...p, newRepo: null, missing: false, newRepoForm: true }; }}>another name</button>
+                    ${close}</div></div>`;
+        }
+        const n = p.count ?? (p.commits ?? []).length;
+        return html`<div class="t-push">
+            <div><b>Push to the new repository</b> <a href=${p.url} target="_blank" rel="noopener">${p.target}</a>
+                <span class="t-dim">${p.squash ? `as one commit: all the clone's files, with none of ${p.repo}'s history`
+                    : `the agent's own history, as it is`}${p.private ? ' · private' : ' · public'}. The session then moves to ${p.newRepo}.</span></div>
+            ${(p.commits ?? []).slice(-20).map(c => html`<div class="t-dim">${c.sha.slice(0, 7)} <span class="t-ink">${c.subject}</span></div>`)}
+            ${(p.commits ?? []).length > 20 ? html`<div class="t-dim">… and ${(p.commits.length - 20)} more before them</div>` : nothing}
+            ${p.diffstat ? html`<pre class="t-stat">${p.diffstat}</pre>` : nothing}
+            <div class="t-row">
+                <button class="t-btn t-acc" ?disabled=${busy || !!this._busy} @click=${() => this._doPushNew(s, p)}>
+                    ${this._busy === 'push-new' || this._busy === 'push-done' ? 'pushing…' : `push ${count(n, 'commit')} as ${p.as}`}</button>
+                ${close}
+            </div></div>`;
+    }
+
+    async _doPushNew(s, p) {
+        const n = p.count ?? (p.commits ?? []).length;
+        const r = await this._act('push-new', { session: s.id, newRepo: p.newRepo, to: p.to, as: p.as, target: p.target,
+            commits: `${n} commit${n === 1 ? '' : 's'}` }, 'Couldn\'t push it');
+        if (!r?.push) return;
+        const x = r.push;
+        const done = await this._act('push-done', { session: s.id, to: p.to, status: x.status ?? 0,
+            ...(x.error ? { error: String(x.error).slice(0, 4000) } : {}), ...(x.pushed ? { pushed: x.pushed } : {}),
+            ...(x.moved ? { moved: x.moved } : {}), ...(x.notMoved ? { notMoved: String(x.notMoved).slice(0, 1000) } : {}) }, 'Couldn\'t push it');
+        if (!done) return;
+        this._push = null;
+        this._newRepo = null;
+        this._pushed = { ...done, pr: null };
     }
 
     async _doPush(s, p) {

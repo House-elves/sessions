@@ -144,6 +144,9 @@ public class Sessions implements Callable<Integer> {
                 case "gh-comment" -> ghDo(config, in, "comment");
                 case "gh-merge" -> ghDo(config, in, "merge");
                 case "push-done" -> pushDone(config, in);
+                case "push-new" -> pushNew(config, in);
+                case "repo-owners" -> repoOwners(config);
+                case "repo-create" -> repoCreate(config, in);
                 case "attach" -> attach(in);
                 case "rename" -> rename(in);
                 case "archive" -> archive(in);
@@ -596,7 +599,8 @@ public class Sessions implements Callable<Integer> {
                 // branch of the repo can take them as a PR.
                 if (git.path("error").asText().contains("merge-base")) throw new IllegalStateException("The agent's commits don't "
                         + "share any history with " + s.path("repo").asText() + "'s default branch (it started afresh), so they "
-                        + "can't go to a branch and PR there");
+                        + "can't go to a branch and PR there. They can go to a new repository: send the agent a short message (like \"ready to "
+                        + "push\"), so the runner reports them again, then push and choose a new repository");
                 throw new IllegalStateException(git.path("error").asText());
             }
             if (git.path("commits").isEmpty()) continue;
@@ -647,6 +651,10 @@ public class Sessions implements Callable<Integer> {
     static ObjectNode preview(Config config, ObjectNode s, String token, int pr) throws Exception {
         harvest(s);
         if (running(s)) throw new IllegalStateException("It's still working: push when this turn is done");
+        JsonNode last = lastGit(s);
+        if (pr == 0 && last != null && last.path("unrelated").asBoolean() && SHA.matcher(last.path("to").asText("")).matches()) {
+            return unrelatedPreview(config, s, last);
+        }
         JsonNode git = work(s);
         // Its PR was merged or closed (on GitHub, not here): its branch is done with, and the next push starts over,
         // on a new branch and PR (or one of your open PRs), as a first push does.
@@ -739,7 +747,193 @@ public class Sessions implements Callable<Integer> {
 
     /** push-preview: what a push would send, and where, for you to read before you push. */
     static JsonNode pushPreview(Config config, JsonNode in) throws Exception {
-        return preview(config, load(in.path("session").asText("")), token(config), in.path("pr").asInt(0));
+        ObjectNode s = load(in.path("session").asText(""));
+        String token = token(config);
+        if (!in.path("newRepo").asText("").isEmpty()) return previewNew(config, s, token, in.path("newRepo").asText().strip());
+        return preview(config, s, token, in.path("pr").asInt(0));
+    }
+
+    // ---- a session's work to a new repository of yours: it's pushed there, and the session moves there ----
+
+    /** The newest finished turn's report of the clone's commits, whatever it says; null before there is one. */
+    static JsonNode lastGit(ObjectNode s) throws IOException {
+        JsonNode turns = s.path("turns");
+        for (int k = turns.size() - 1; k >= 0; k--) {
+            JsonNode t = turns.get(k);
+            if (!t.path("status").asText().equals("done")) continue;
+            Path f = AGENTS.resolve(t.path("agent").asText() + ".json");
+            if (!Files.isRegularFile(f)) continue;
+            JsonNode git = JSON.readTree(f.toFile()).path("git");
+            if (git.isObject() && !git.isEmpty()) return git;
+        }
+        return null;
+    }
+
+    /** Work with a history of its own (the agent started a new project): it can only go to a new repository. */
+    static ObjectNode unrelatedPreview(Config config, ObjectNode s, JsonNode git) {
+        ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("repo", s.path("repo").asText())
+                .put("as", config.githubLogin).put("unrelated", true).put("to", git.path("to").asText())
+                .put("count", git.path("count").asInt(git.path("commits").size()));
+        out.set("commits", git.path("commits"));
+        return out;
+    }
+
+    /**
+     * What a push to a new repository would send: the clone as it is, to target's default branch, only if target is
+     * yours to push to and empty. Work on the session's repo goes as one commit with all the clone's files and none of
+     * the repo's history; a history of the agent's own goes as it is. {missing} when target isn't on GitHub yet.
+     */
+    static ObjectNode previewNew(Config config, ObjectNode s, String token, String target) throws Exception {
+        harvest(s);
+        if (running(s)) throw new IllegalStateException("It's still working: push when this turn is done");
+        if (!runnerAtLeast(0, 57)) throw new IllegalStateException("Pushing to a new repository needs runner 0.57.0 or later: update the desk");
+        if (!REPO.matcher(target).matches()) throw new IllegalArgumentException("A repository is owner/name");
+        if (target.equalsIgnoreCase(s.path("repo").asText())) throw new IllegalArgumentException("That's the session's own repo");
+        JsonNode git = lastGit(s);
+        if (git == null || !SHA.matcher(git.path("to").asText("")).matches()) {
+            throw new IllegalStateException("There are no commits to push yet: ask the agent to commit its work");
+        }
+        boolean own = git.path("unrelated").asBoolean();
+        ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("repo", s.path("repo").asText())
+                .put("as", config.githubLogin).put("newRepo", target).put("headRepo", target).put("to", git.path("to").asText())
+                .put("squash", !own);
+        out.set("owners", owners(config, token));
+        String info = run(List.of("gh", "api", "repos/" + target, "--jq", "{push: .permissions.push, private, url: .html_url, branch: .default_branch}"), token);
+        if (info == null || info.isBlank()) return out.put("missing", true);
+        JsonNode r = JSON.readTree(info);
+        if (!r.path("push").asBoolean()) throw new IllegalStateException(config.githubLogin + " can't push to " + target);
+        String branches = run(List.of("gh", "api", "repos/" + target + "/branches", "--jq", "length"), token);
+        if (branches == null || !branches.strip().equals("0")) {
+            throw new IllegalStateException(target + " isn't empty: a session moves only to a new, empty repository");
+        }
+        String branch = BRANCH.matcher(r.path("branch").asText("")).matches() ? r.path("branch").asText() : "main";
+        out.put("headRef", branch).put("target", target + ":" + branch).put("private", r.path("private").asBoolean())
+                .put("url", r.path("url").asText());
+        ArrayNode commits = out.putArray("commits");
+        JsonNode had = git.path("commits");
+        if (own) {
+            commits.addAll((ArrayNode) had);
+            out.put("count", git.path("count").asInt(had.size())).put("diffstat", git.path("diffstat").asText(""));
+        } else {
+            JsonNode last = had.isEmpty() ? null : had.get(had.size() - 1);
+            commits.addObject().put("sha", git.path("to").asText()).put("subject", last == null ? oneLine(s.path("name").asText(), 200)
+                    : last.path("subject").asText());
+            out.put("count", 1);
+        }
+        return out.put("title", oneLine(s.path("name").asText(), 200));
+    }
+
+    /** Who can own a new repository: you, then your organizations. */
+    static ArrayNode owners(Config config, String token) throws Exception {
+        ArrayNode list = JSON.createArrayNode().add(config.githubLogin);
+        String orgs = run(List.of("gh", "api", "user/orgs?per_page=100", "--jq", ".[].login"), token);
+        if (orgs != null) orgs.lines().map(String::strip).filter(o -> REPO.matcher(o + "/x").matches()).forEach(list::add);
+        return list;
+    }
+
+    static JsonNode repoOwners(Config config) throws Exception {
+        ObjectNode out = JSON.createObjectNode().put("as", config.githubLogin);
+        out.set("owners", owners(config, token(config)));
+        return out;
+    }
+
+    /**
+     * repo-create (on your click in the desk's bar): a new repository on GitHub, yours or your organization's, with
+     * your gh account. Empty, to push a session to; or with a README (init), to start a session on.
+     */
+    static JsonNode repoCreate(Config config, JsonNode in) throws Exception {
+        String owner = in.path("owner").asText("").strip(), name = in.path("name").asText("").strip();
+        String visibility = in.path("visibility").asText("private");
+        if (!REPO.matcher(owner + "/" + name).matches() || name.equals(".") || name.equals("..")) throw new IllegalArgumentException("A repository is owner/name");
+        if (!in.path("as").asText("").equalsIgnoreCase(config.githubLogin)) throw new IllegalArgumentException("Not the account in Sessions' settings");
+        if (!visibility.equals("private") && !visibility.equals("public")) throw new IllegalArgumentException("Private or public?");
+        String token = token(config);
+        if (run(List.of("gh", "api", "repos/" + owner + "/" + name, "--jq", ".full_name"), token) != null) {
+            throw new IllegalStateException(owner + "/" + name + " is on GitHub already");
+        }
+        List<String> cmd = new ArrayList<>(List.of("gh", "api", "-X", "POST",
+                owner.equalsIgnoreCase(config.githubLogin) ? "user/repos" : "orgs/" + owner + "/repos",
+                "-f", "name=" + name, "-F", "private=" + visibility.equals("private"), "-F", "auto_init=" + in.path("init").asBoolean(false)));
+        String about = oneLine(in.path("description").asText(""), 350);
+        if (!about.isEmpty()) cmd.addAll(List.of("-f", "description=" + about));
+        cmd.addAll(List.of("--jq", "{repo: .full_name, url: .html_url}"));
+        Path out = Files.createTempFile("sessions-", ".out");
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true).redirectOutput(out.toFile());
+            pb.environment().put("GH_TOKEN", token);
+            Process p = pb.start();
+            if (!p.waitFor(60, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                throw new IllegalStateException("GitHub didn't answer in time");
+            }
+            String said = Files.readString(out, StandardCharsets.UTF_8).strip();
+            if (p.exitValue() != 0) {
+                Matcher m = Pattern.compile("\"message\"\\s*:\\s*\"([^\"]{1,300})\"").matcher(said);
+                String why = said.contains("name already exists") ? owner + "/" + name + " is on GitHub already"
+                        : m.find() ? m.group(1) : clip(said, 300);
+                throw new IllegalStateException("GitHub didn't create it: " + why
+                        + (said.contains("HTTP 403") || said.contains("HTTP 404") ? " (can " + config.githubLogin + " create repositories in " + owner + "?)" : ""));
+            }
+            JsonNode r = JSON.readTree(said.lines().reduce((a, b) -> b).orElse("{}"));
+            if (!REPO.matcher(r.path("repo").asText("")).matches()) throw new IllegalStateException("GitHub didn't say what it made");
+            return JSON.createObjectNode().put("repo", r.path("repo").asText()).put("url", r.path("url").asText());
+        } finally {
+            Files.deleteIfExists(out);
+        }
+    }
+
+    /**
+     * push-new (on your click in the desk's bar): the session's work to a new, empty repository, by the runner, which
+     * then moves the session's clone there; push-done moves the session too, so its next turns and pushes are there.
+     */
+    static JsonNode pushNew(Config config, JsonNode in) throws Exception {
+        ObjectNode s = load(in.path("session").asText(""));
+        String token = token(config);
+        ObjectNode p = previewNew(config, s, token, in.path("newRepo").asText("").strip());
+        if (p.path("missing").asBoolean()) throw new IllegalStateException(p.path("newRepo").asText() + " isn't on GitHub: create it first");
+        if (!in.path("as").asText("").equalsIgnoreCase(config.githubLogin)) throw new IllegalArgumentException("Not the account in Sessions' settings");
+        int n = p.path("count").asInt();
+        if (!in.path("to").asText("").equals(p.path("to").asText()) || !in.path("target").asText("").equals(p.path("target").asText())
+                || !in.path("commits").asText("").equals(n + (n == 1 ? " commit" : " commits"))) {
+            throw new IllegalStateException("The work changed since you looked: look at it again");
+        }
+        ObjectNode push = JSON.createObjectNode().put("repo", s.path("repo").asText()).put("number", 0)
+                .put("slot", s.path("id").asText()).put("headRepo", p.path("headRepo").asText())
+                .put("headRef", p.path("headRef").asText()).put("from", p.path("to").asText()).put("to", p.path("to").asText())
+                .put("newRepo", true).put("squash", p.path("squash").asBoolean());
+        s.putObject("pendingPush").put("to", p.path("to").asText()).put("target", p.path("target").asText())
+                .put("headRepo", p.path("headRepo").asText()).put("headRef", p.path("headRef").asText())
+                .put("newRepo", true).put("at", Instant.now().toString());
+        save(s);
+        push.put("token", token);
+        return JSON.createObjectNode().put("session", s.path("id").asText()).set("push", push);
+    }
+
+    /**
+     * push-done after a push to a new repository: it's there (as GitHub shows), and the session moves to that repo,
+     * when the runner moved its clone; its old branch and PR stay with the old repo.
+     */
+    static JsonNode pushNewDone(Config config, ObjectNode s, JsonNode in, JsonNode pending) throws Exception {
+        String to = pending.path("to").asText(), pushed = in.path("pushed").asText("");
+        String headRepo = pending.path("headRepo").asText(""), headRef = pending.path("headRef").asText("");
+        if (!REPO.matcher(headRepo).matches() || !BRANCH.matcher(headRef).matches() || !SHA.matcher(pushed).matches()) {
+            throw new IllegalStateException("The runner didn't say what it pushed");
+        }
+        String there = run(List.of("gh", "api", "repos/" + headRepo + "/branches/" + headRef, "--jq", ".commit.sha"), token(config));
+        if (!pushed.equals(there == null ? "" : there.strip())) throw new IllegalStateException("GitHub doesn't show that commit on " + headRepo + ":" + headRef);
+        String old = s.path("repo").asText(), note;
+        if (in.path("moved").asText("").equalsIgnoreCase(headRepo)) {
+            s.put("repo", headRepo).put("movedFrom", old);
+            for (String k : List.of("headRepo", "branch", "pushed", "pushedAt", "pr")) s.remove(k);
+            note = "The session moved from " + old + " to " + headRepo + ": its next turns and pushes are there.";
+        } else {
+            note = oneLine(in.path("notMoved").asText("Pushed, but the session stays on " + old + "."), 400);
+        }
+        pushed(s, pushed, pending, true, null, note);
+        save(s);
+        return JSON.createObjectNode().put("session", s.path("id").asText()).put("pushed", pushed)
+                .put("target", headRepo + ":" + headRef).put("note", note).put("moved", s.path("repo").asText().equals(headRepo))
+                .put("url", "https://github.com/" + headRepo);
     }
 
     /**
@@ -798,6 +992,7 @@ public class Sessions implements Callable<Integer> {
             throw new IllegalStateException("No push of that is waiting: push it again");
         }
         s.remove("pendingPush");
+        if (in.path("status").asInt() == 200 && pending.path("newRepo").asBoolean()) return pushNewDone(config, s, in, pending);
         if (in.path("status").asInt() != 200) {
             String why = pushError(in.path("error").asText("It wasn't pushed"), config);
             pushed(s, to, pending, false, null, why);
@@ -1264,7 +1459,9 @@ public class Sessions implements Callable<Integer> {
     static final String SUGGEST_RULE = "\n\n<desk-note>You can't push or open PRs from here: when work is ready, commit it in "
             + "this clone (as one commit on the default branch, with no Co-Authored-By or other attribution lines). I push it with "
             + "the push button at the top of this chat, onto a new branch and draft PR or onto one of my open PRs; if I ask you to "
-            + "push, tell me to use that button, and don't give me git push commands. To update one of my PRs, fetch it "
+            + "push, tell me to use that button, and don't give me git push commands. When the work belongs in a new repository "
+            + "(a new project), commit it here as it should start there, and tell me to push it to a new repository with that button: "
+            + "I can create the repository there, and this session then moves to it. Don't make bundles or patches for me to push. To update one of my PRs, fetch it "
             + "(git fetch origin pull/<n>/head) and leave its change as one commit on the default branch, conflicts resolved; "
             + "pushing onto that PR then replaces what's on its branch (also someone else's PR, when they let maintainers edit it). "
             + "You have no GitHub access, but you can ask me to close, comment on or merge this repo's issues and PRs: put each on "
