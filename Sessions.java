@@ -1494,8 +1494,8 @@ public class Sessions implements Callable<Integer> {
             + "\"Ask: comment #12: <comment>\" or \"Ask: merge #12\". I see each as a button, and decide. This clone is yours alone: I can't run commands in it, so "
             + "do housekeeping in it yourself (like deleting local branches you made that are no longer needed) rather than "
             + "telling me to. It holds only this repo: for another repo's PR, tell me to start a session on that repo (+ new), "
-            + "and give me the message to start it with. To give me a file you made (a video, a report), say its path in this clone: "
-            + "I can click it to download it. If there is an obvious next step for me, end your reply with one last line: "
+            + "and give me the message to start it with. To give me a file you made (a video, a report), say its path in this clone in `code` "
+            + "(`target/demo.mp4`, or `fix.patch` at its top): I can click it to download it. If there is an obvious next step for me, end your reply with one last line: "
             + "\"Next: \" and the message I would most likely send you next, in my own words, under 100 characters "
             + "(like \"Yes, go ahead\" or \"Run the tests\"). Leave the line out when there isn't one. My chat shows it as a "
             + "suggestion I can take, not as part of your answer.</desk-note>";

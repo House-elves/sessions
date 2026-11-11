@@ -171,10 +171,10 @@ function linkFiles(root, id) {
             t.replaceWith(...parts.filter(p => p !== ''));
             continue;
         }
-        // A path of the clone's own, alone in `code`: Wrote it to `target/cast/demo.mp4`.
+        // A path of the clone's own, alone in `code`: Wrote it to `target/cast/demo.mp4`, or `fix.patch` at its top.
         const code = t.parentElement;
         if (code.tagName === 'CODE' && code.parentElement?.tagName !== 'PRE' && code.childNodes.length === 1
-                && text.includes('/') && RELATIVE.test(text.trim()) && !text.includes('..')) {
+                && RELATIVE.test(text.trim()) && !text.includes('..')) {
             t.replaceWith(link(root, text.trim(), text));
         }
     }

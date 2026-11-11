@@ -1,6 +1,11 @@
 # What's new
 
 
+## 0.20.1
+
+- A file the agent names in its reply without a folder, like `fix.patch` at the top of its clone, downloads on a click
+  too (before, only a name with a folder in it did).
+
 ## 0.20.0
 
 - An open session looks like the rest of the desk around its console: the session tabs, its name and numbers, its
