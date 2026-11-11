@@ -2,7 +2,7 @@
 # It comes with the desk (builtin): it isn't on the + page, and the desk keeps it installed and updates it with itself.
 name: sessions
 title: Sessions
-version: 0.20.1
+version: 0.21.0
 author: "@phillip-kruger"
 description: Named chat sessions with a coding agent (Claude Code or IBM Bob), each working in its own clone of a repo, that you can continue from any device signed in to your desk.
 main: Sessions.java
@@ -19,6 +19,7 @@ reads:
   - Each message you send goes to the coding agent you picked for the session, Claude Code or IBM Bob (the runner's, in its sandbox, with no GitHub credentials), which reads and changes its own clone of that repo, and can reach the internet. IBM Bob uses the API key in the runner's settings.
   - Which coding agents are installed on this machine, to offer them for a new session.
   - When you start a session from a todo, that todo in the Todo list's saved list (its description, checklist and issues, which it only reads), as the session's goal for you to read and change before you start.
+  - When you start a session from a bump in the mvnpm elf (Let an agent do it), that bump in its saved board (which it only reads), and from GitHub as your gh account its changed files and the mvnpm elf's comment on it, as the session's goal for you to read and change before you start.
 writes:
   - Any other file you attach to a message (a slide deck, a spreadsheet), copied into the session's clone in .attached/ (which git leaves out) for its agent to open.
   - Your sessions, on this machine. The agent's commits stay in its clone on this machine until you push them.

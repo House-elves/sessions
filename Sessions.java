@@ -127,7 +127,7 @@ public class Sessions implements Callable<Integer> {
             JsonNode answer = switch (action) {
                 case "create" -> create(config, in);
                 case "new-options" -> newOptions(config);
-                case "link-context" -> linkContext(in);
+                case "link-context" -> in.path("link").asText("").startsWith("mvnpm-dependabot:") ? mvnpmContext(config, in) : linkContext(in);
                 case "send" -> send(in);
                 case "agent-done" -> agentDone(in);
                 case "unqueue" -> unqueue(in);
@@ -297,6 +297,86 @@ public class Sessions implements Callable<Integer> {
         if (!issues.isEmpty()) p.append("\n\nIts GitHub issues: ").append(String.join(", ", issues)).append(".");
         out.put("title", oneLine(step != null ? step.path("text").asText("") : what, 80));
         out.put("prompt", clip(p.toString(), MAX_TEXT));
+        return out;
+    }
+
+    /**
+     * link-context for a bump in the mvnpm elf (mvnpm-dependabot:owner.repo.pr), from its tab's Let an agent do it:
+     * the bump as its board has it (which it only reads), Dependabot's change and the elf's check comment from GitHub,
+     * as a goal where the agent makes the same bump itself and fixes what it needs. {title, prompt, repo}, or {}.
+     */
+    static JsonNode mvnpmContext(Config config, JsonNode in) throws Exception {
+        ObjectNode out = JSON.createObjectNode();
+        Matcher m = Pattern.compile("mvnpm-dependabot:([A-Za-z0-9-]+)\\.([A-Za-z0-9._-]+)\\.([0-9]{1,7})").matcher(in.path("link").asText(""));
+        if (!m.matches()) return out;
+        String repo = m.group(1) + "/" + m.group(2);
+        int number = Integer.parseInt(m.group(3));
+        Path board = Path.of(System.getProperty("user.home"), ".config", "mvnpm-dependabot", "board", "board.json");
+        if (!Files.isRegularFile(board) || Files.size(board) > 20_000_000) return out;
+        JsonNode row = null;
+        for (JsonNode r : JSON.readTree(board.toFile()).path("rows")) {
+            if (r.path("pr").path("repo").asText().equalsIgnoreCase(repo) && r.path("pr").path("number").asInt() == number) row = r;
+        }
+        if (row == null || !REPO.matcher(repo).matches()) return out;
+        JsonNode pr = row.path("pr"), bump = row.path("bump");
+        String artifact = oneLine(bump.path("groupId").asText("") + ":" + bump.path("artifactId").asText(""), 200);
+        String from = oneLine(bump.path("from").asText(""), 40), to = oneLine(bump.path("to").asText(""), 40);
+        String title = oneLine(pr.path("title").asText(""), 200);
+        String url = "https://github.com/" + repo + "/pull/" + number;
+
+        // From GitHub, as your gh account: what Dependabot changed, and what the elf's check said. Left out if it can't.
+        String token = null;
+        try {
+            token = token(config);
+        } catch (Exception e) {
+            // Without gh the goal still says where to look.
+        }
+        String files = null, said = null;
+        if (token != null) {
+            try {
+                files = run(List.of("gh", "api", "repos/" + repo + "/pulls/" + number + "/files?per_page=50", "--jq",
+                        ".[] | \"--- \" + .filename + \"\\n\" + (.patch // \"(no diff shown)\")"), token);
+            } catch (Exception e) {
+                files = null;
+            }
+            Matcher c = Pattern.compile("#issuecomment-([0-9]{1,15})$").matcher(row.path("check").path("comment").asText(""));
+            if (c.find()) {
+                try {
+                    said = run(List.of("gh", "api", "repos/" + repo + "/issues/comments/" + c.group(1), "--jq", ".body"), token);
+                } catch (Exception e) {
+                    said = null;
+                }
+            }
+        }
+        StringBuilder p = new StringBuilder();
+        p.append("Bump ").append(artifact).append(" from ").append(from).append(" to ").append(to).append(" in ").append(repo)
+                .append(", the bump Dependabot made in ").append(repo).append("#").append(number).append(" (").append(url)
+                .append("), but this time make it work: I'll push yours as my own PR and close Dependabot's.");
+        String verdict = row.path("check").path("verdict").asText("");
+        if (!verdict.isEmpty() || "FAILURE".equals(pr.path("ci").asText())) {
+            p.append("\n\nDependabot's PR isn't good as it is:")
+                    .append(verdict.isEmpty() ? "" : " the mvnpm elf's check says " + switch (verdict) {
+                        case "NEEDS_HUMAN" -> "it needs a human to look";
+                        case "NOT_SAFE" -> "it isn't safe";
+                        default -> verdict.toLowerCase(java.util.Locale.ROOT);
+                    } + ".")
+                    .append("FAILURE".equals(pr.path("ci").asText()) ? " Its CI is failing." : "");
+        }
+        if (said != null && !said.isBlank()) p.append("\n\nThe mvnpm elf's check, as it commented on that PR:\n\n").append(clip(said.strip(), 8000));
+        if (files != null && !files.isBlank()) p.append("\n\nDependabot's change:\n\n```diff\n").append(clip(files.strip(), 8000)).append("\n```");
+        p.append("\n\nWhat to do:\n")
+                .append("1. On a branch from the default branch, make the same version change (git fetch origin pull/").append(number)
+                .append("/head shows Dependabot's).\n")
+                .append("2. Fix what the new version needs: code and resources that use it, and any lock files that pin its npm or mvnpm ")
+                .append("dependencies (the mvnpm locker's files, an import map, a package-lock), so the build gets ").append(to)
+                .append(" and its dependencies.\n")
+                .append("3. Build the modules that use it and run their tests, the UI tests too (those that open the page in a browser, ")
+                .append("like the Dev UI or web UI tests), and look at the page yourself if you can. Say what you ran and what passed.\n")
+                .append("4. Leave it as one commit, with a message like \"").append(title.isEmpty() ? "Bump " + artifact + " from " + from + " to " + to : title)
+                .append("\". Don't comment on or close Dependabot's PR: I close it once yours is pushed.");
+        out.put("title", oneLine(bump.path("artifactId").asText(artifact) + " " + to, 80));
+        out.put("prompt", clip(p.toString(), MAX_TEXT));
+        out.put("repo", repo);
         return out;
     }
 

@@ -592,7 +592,7 @@ class SessionsTab extends LitElement {
             ${link ? html`<p class="hint">Linked to ${link.title || link.ref} (${link.elf}).</p>` : nothing}
             <label>Name <input type="text" name="name" required maxlength="80" .value=${link?.title?.slice(0, 80) ?? ''}
                 placeholder="mvnpm search fix"></label>
-            <label>Repo <input type="text" name="repo" required maxlength="140" placeholder="owner/name" list="repo-list"
+            <label>Repo <input type="text" name="repo" required maxlength="140" placeholder="owner/name" list="repo-list" .value=${this._context?.repo ?? ''}
                 autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9\\-]{0,38}/[A-Za-z0-9._\\-]{1,100}">
                 <span class="field-hint">${repos.length ? 'Type any repo, or pick one from your GitHub board and your sessions.'
                     : 'Type a repo you can read, like owner/name.'}</span></label>
@@ -609,8 +609,9 @@ class SessionsTab extends LitElement {
             <label>What it's for <textarea name="prompt" required maxlength="20000"
                 placeholder="The first message. It stays pinned above the chat, and the agent gets it with every turn."
                 .value=${this._context?.prompt ?? link?.title ?? ''}></textarea>
-                ${link && this._context?.prompt ? html`<span class="field-hint">From the ${link.elf === 'todo-list' ? 'todo' : link.elf}: its
-                    description, checklist and issues. Change it as you like.</span>` : nothing}</label>
+                ${link && this._context?.prompt ? html`<span class="field-hint">${link.elf === 'mvnpm-dependabot'
+                    ? 'From the mvnpm elf: the bump, Dependabot\'s change and what its check found. Change it as you like.'
+                    : html`From the ${link.elf === 'todo-list' ? 'todo' : link.elf}: its description, checklist and issues. Change it as you like.`}</span>` : nothing}</label>
             ${this._newFiles()}
             <p class="hint">The agent works in its own clone of the repo, in the runner's sandbox, with no GitHub credentials:
                 it commits there, and nothing is pushed.</p>
@@ -720,6 +721,7 @@ class SessionsTab extends LitElement {
                         <button class="sm quiet" @click=${() => this._act('unlink', { session: s.id }, 'Couldn\'t unlink it')}>Unlink</button>`
                         : html`<button class="sm quiet" @click=${() => this._linkTodo(s)}>Link a todo</button>`}
                     <span class="s-grow"></span>
+                    ${this._supersede(s)}
                     ${s.pr ? html`<a class="btn sm quiet" href=${s.pr} target="_blank" rel="noopener" title=${s.branch ? `Branch ${s.branch}` : ''}>${prLabel(s.pr)}</a>` : nothing}
                     ${this._github ? html`<button class="sm" ?disabled=${busy || !!this._busy} title=${busy ? 'When this turn is done' : 'Read the commits, then push them to GitHub'}
                         @click=${() => this._pushPreview(s)}>${this._busy === 'push-preview' ? html`${spinner}Reading…` : 'Push'}</button>` : nothing}
@@ -745,6 +747,18 @@ class SessionsTab extends LitElement {
                 ${this._compose(s, busy)}
             </div>
         </div>`;
+    }
+
+    /**
+     * A session started from a bump in the mvnpm elf, with its own PR now: close Dependabot's there, saying yours takes
+     * it over (the mvnpm tab asks the desk's bar, and makes the write).
+     */
+    _supersede(s) {
+        const m = s.link?.elf === 'mvnpm-dependabot' ? /^([A-Za-z0-9-]+)\.([A-Za-z0-9._-]+)\.([0-9]{1,7})$/.exec(s.link.ref ?? '') : null;
+        const mine = /\/pull\/([0-9]{1,7})$/.exec(s.pr ?? '');
+        if (!m || !mine || `${m[1]}/${m[2]}`.toLowerCase() !== (s.repo ?? '').toLowerCase()) return nothing;
+        return html`<button class="sm" title="In the mvnpm tab: Dependabot's PR closes with the comment &quot;Superseded by #${mine[1]}.&quot; (the desk asks you first)"
+            @click=${() => elf.openElf('mvnpm-dependabot', `close/${s.link.ref}/${mine[1]}`).catch(e => { this._error = e.message; })}>Close Dependabot's #${m[3]}</button>`;
     }
 
     /** The command that carries this session on in Claude Code in a terminal, to copy. */
@@ -1608,7 +1622,7 @@ class SessionsTab extends LitElement {
 
     async _openLink(link) {
         try {
-            await elf.openElf(link.elf, `todo/${link.ref}`);
+            await elf.openElf(link.elf, link.elf === 'todo-list' ? `todo/${link.ref}` : '');
         } catch {
             this._error = `${link.elf} isn't on your desk any more.`;
         }

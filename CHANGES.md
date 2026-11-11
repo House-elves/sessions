@@ -1,6 +1,12 @@
 # What's new
 
 
+## 0.21.0
+
+- From the mvnpm elf's **Let an agent do it** on a bump: a new session on that repo, its goal written from the bump
+  (Dependabot's change, what the mvnpm check found, and to fix lock files and run the UI tests). Once you've pushed
+  it, **Close Dependabot's #N** in the session closes Dependabot's PR from the mvnpm tab, as superseded by yours.
+
 ## 0.20.1
 
 - A file the agent names in its reply without a folder, like `fix.patch` at the top of its clone, downloads on a click
