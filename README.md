@@ -19,6 +19,11 @@ your desk.
 - **Push and a draft PR:** with the GitHub elf on your desk, "push" shows the session's commits and diff, and on
   your confirm pushes them to a branch (session/<name>, on the repo or your fork) and opens a draft PR (runner 0.52.0),
   or onto one of the repo's open PRs instead, replacing what's on its branch.
+- **Review and merge:** once a session's PR is pushed, "Review and merge" (on your confirm) marks it ready for
+  review, has the agent review it and fix what it finds, pushes the fixes, and merges it once its checks pass.
+  Failed checks (with the end of their GitHub Actions logs) and conflicts go back to the agent, up to 3 rounds; it
+  stops, saying why, on anything else, or after a day. It only merges the PR at the commit it pushed, and goes on
+  while Sessions is open on one of your devices.
 - **Break out:** "break out" gives you `house-elves resume <id>`, which carries a Claude Code session on in a terminal, in
   its clone, and hands it back to the desk when you exit.
 - **Voice:** 🎤 in the message box: the desk listens (your browser's speech recognition, or Whisper on its machine) and

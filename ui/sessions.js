@@ -29,6 +29,12 @@ async function loadSessions() {
 }
 
 const working = s => (s.turns ?? []).some(t => t.status === 'running');
+/** Review and merge on its way: the agent reviewing or fixing, its fixes being pushed, or its checks waited for. */
+const SHIP_ON = ['review', 'fix', 'push', 'checks'];
+const shipping = s => SHIP_ON.includes(s.ship?.step);
+const SHIP_STEP = { review: 'reviewing', fix: 'fixing', push: 'pushing the fixes', checks: 'waiting for checks', merged: 'merged', stopped: 'stopped' };
+/** How often the tab reads a PR's checks again while it waits for them. */
+const SHIP_POLL = 30_000;
 
 // Files with a message: at most this many; an image no bigger than Claude reads one (1568 pixels on the long side),
 // about 450 KB; a text file up to 100 KB. Each goes to the elf in parts: the desk takes up to 64 KB at a time.
@@ -197,7 +203,7 @@ class SessionsTab extends LitElement {
         _lines: { state: true }, _confirmDelete: { state: true }, _tags: { state: true }, _filter: { state: true },
         _tagging: { state: true }, _options: { state: true }, _installed: { state: true }, _context: { state: true },
         _files: { state: true }, _sayMode: { state: true }, _fillOk: { state: true }, _dragging: { state: true }, _github: { state: true }, _push: { state: true },
-        _pushDiff: { state: true }, _pushed: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true }, _look: { state: true }, _listening: { state: true },
+        _pushDiff: { state: true }, _pushed: { state: true }, _shipError: { state: true }, _otherPr: { state: true }, _breakout: { state: true }, _copied: { state: true }, _look: { state: true }, _listening: { state: true },
         _newRepo: { state: true }, _repoMade: { state: true },
     };
 
@@ -405,6 +411,7 @@ class SessionsTab extends LitElement {
         this._sessions = null;
         this._route = elf.route();
         this._live = {};
+        this._shipAt = {};
         this._lines = {};
         this._goalOpen = false;
         this._archived = false;
@@ -425,6 +432,8 @@ class SessionsTab extends LitElement {
             .then(v => { this._github = !!v; }).catch(() => { this._github = false; });
         // A session changed, or an agent said something: read again.
         this._off = elf.onChange(() => this._load());
+        // Review and merge goes on while this tab is open (on any device): its push and its checks need asking for.
+        this._shipTimer = setInterval(() => this._drive(), 15_000);
         this._offRoute = elf.onRoute(r => { this._route = r; this._routeChanged(); });
         this._routeChanged();
     }
@@ -432,6 +441,7 @@ class SessionsTab extends LitElement {
     disconnectedCallback() {
         this._off?.();
         this._offRoute?.();
+        clearInterval(this._shipTimer);
         super.disconnectedCallback();
     }
 
@@ -449,6 +459,7 @@ class SessionsTab extends LitElement {
                 }
             }
             this._live = live;
+            this._drive();
             // Only clears its own error: an action's (which reloads after) stays until you dismiss it.
             if (this._loadFailed) this._error = null;
             this._loadFailed = false;
@@ -725,6 +736,9 @@ class SessionsTab extends LitElement {
                     ${s.pr ? html`<a class="btn sm quiet" href=${s.pr} target="_blank" rel="noopener" title=${s.branch ? `Branch ${s.branch}` : ''}>${prLabel(s.pr)}</a>` : nothing}
                     ${this._github ? html`<button class="sm" ?disabled=${busy || !!this._busy} title=${busy ? 'When this turn is done' : 'Read the commits, then push them to GitHub'}
                         @click=${() => this._pushPreview(s)}>${this._busy === 'push-preview' ? html`${spinner}Reading…` : 'Push'}</button>` : nothing}
+                    ${this._github && /\/pull\/[0-9]{1,7}$/.test(s.pr ?? '') && !shipping(s) ? html`<button class="sm" ?disabled=${busy || !!this._busy}
+                        title=${busy ? 'When this turn is done' : `Mark ${prLabel(s.pr)} ready for review, have the agent review and fix it, and merge it once its checks pass (the desk asks you first)`}
+                        @click=${() => this._ship(s)}>${this._busy === 'ship' ? html`${spinner}Starting…` : 'Review and merge'}</button>` : nothing}
                     ${s.terminal ? html`<span class="chip warn" title="house-elves resume: the desk waits until you exit Claude Code there">In a terminal</span>`
                         : (s.agent ?? 'claude') === 'claude' && s.session ? html`<button class="sm quiet" ?disabled=${busy}
                         title=${busy ? 'When this turn is done' : 'Carry on in Claude Code in a terminal'}
@@ -742,6 +756,7 @@ class SessionsTab extends LitElement {
                 <div class="t-log" aria-live="polite" @scroll=${e => { this._stick = e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight < 40; }}>
                     ${(s.turns ?? []).map((t, i, all) => html`${this._turn(t, i)}${this._asks(s, t)}${this._pushes(s, t, all[i + 1])}`)}
                 </div>
+                ${this._shipBox(s)}
                 ${this._pushBox(s, busy)}
                 ${this._breakoutBox(s)}
                 ${this._compose(s, busy)}
@@ -1178,6 +1193,66 @@ class SessionsTab extends LitElement {
             : { ...base, sha: look.sha, short: look.sha.slice(0, 7) };
         const r = await this._act(`gh-${a.kind}`, values, `Couldn't ${a.kind} #${a.number}`);
         if (r?.done) this._look = null;
+    }
+
+    // ---- review and merge: ready for review, the agent's review and fixes, pushed, merged on green ----
+
+    async _ship(s) {
+        const m = /\/pull\/([0-9]{1,7})$/.exec(s.pr ?? '');
+        if (!m) return;
+        const as = (await elf.values().catch(() => ({})))?.GITHUB_LOGIN;
+        if (!as) {
+            this._error = 'Set your GitHub account in Sessions\' settings to review and merge';
+            return;
+        }
+        this._shipError = null;
+        await this._act('ship', { session: s.id, number: Number(m[1]), as }, 'Couldn\'t start it');
+    }
+
+    /**
+     * Moves each session's review and merge on: its fixes pushed (the runner pushes, then push-done keeps it), its
+     * checks read every SHIP_POLL, and the agent sent what failed. One at a time in this tab; the elf keeps two tabs
+     * from pushing twice.
+     */
+    async _drive() {
+        if (this._driving) return;
+        this._driving = true;
+        try {
+            for (const s of this._sessions ?? []) {
+                if (!shipping(s) || working(s)) continue;
+                const step = s.ship.step;
+                if (step === 'checks' && Date.now() - (this._shipAt[s.id] ?? 0) < SHIP_POLL) continue;
+                this._shipAt[s.id] = Date.now();
+                try {
+                    const r = await elf.act('ship-step', { session: s.id });
+                    if (r?.push && r.to) {
+                        await elf.act('push-done', { session: s.id, to: r.to, status: r.push.status ?? 0,
+                            ...(r.push.error ? { error: String(r.push.error).slice(0, 4000) } : {}) }).catch(() => {});
+                    }
+                    if (this._shipError?.session === s.id) this._shipError = null;
+                } catch (e) {
+                    this._shipError = { session: s.id, message: e.message };
+                }
+            }
+        } finally {
+            this._driving = false;
+        }
+    }
+
+    /** Where review and merge is: what it's doing or waiting for, or how it ended. */
+    _shipBox(s) {
+        const sh = s.ship;
+        if (!sh) return nothing;
+        const on = shipping(s);
+        const err = this._shipError?.session === s.id ? this._shipError.message : null;
+        return html`<div class="t-push">
+            <div><b>Review and merge</b> <a href=${sh.pr} target="_blank" rel="noopener">PR #${sh.number}</a>
+                <span class="t-dim">· ${SHIP_STEP[sh.step] ?? sh.step}${sh.rounds ? ` · ${count(sh.rounds, 'round')} of fixes` : ''}</span></div>
+            <div class=${sh.step === 'stopped' ? 't-warn' : sh.step === 'merged' ? 't-green' : 't-dim'}>${on ? html`${spinner} ` : sh.step === 'merged' ? '✓ ' : '✗ '}${sh.note}</div>
+            ${err ? html`<div class="t-red">${err}</div>` : nothing}
+            ${on ? html`<div class="t-dim">It goes on while Sessions is open on one of your devices.</div>` : nothing}
+            <div class="t-row"><button class="t-btn" @click=${() => this._act('ship-stop', { session: s.id }, 'Couldn\'t stop it')}>${on ? 'stop' : 'ok'}</button></div>
+        </div>`;
     }
 
     /** The pushes made after this turn (and before the next): where they went, or why they didn't. */

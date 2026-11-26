@@ -3,6 +3,7 @@
 //DEPS info.picocli:picocli:4.7.6
 //DEPS com.fasterxml.jackson.core:jackson-databind:2.17.2
 //SOURCES Config.java
+//SOURCES Ship.java
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -35,7 +36,7 @@ import java.util.regex.Pattern;
  * of the session's repo kept for that session alone (checkout slot), resuming the session's agent so it keeps its
  * context. The session's first message (its goal) goes with every turn. Without --action it lists the sessions.
  */
-@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.7.1", description = "Coding-agent sessions for Elf Desk")
+@Command(name = "sessions", mixinStandardHelpOptions = true, version = "0.22.0", description = "Coding-agent sessions for Elf Desk")
 public class Sessions implements Callable<Integer> {
 
     static final ObjectMapper JSON = new ObjectMapper();
@@ -145,6 +146,9 @@ public class Sessions implements Callable<Integer> {
                 case "gh-merge" -> ghDo(config, in, "merge");
                 case "push-done" -> pushDone(config, in);
                 case "push-new" -> pushNew(config, in);
+                case "ship" -> Ship.start(config, in);
+                case "ship-step" -> Ship.step(config, in);
+                case "ship-stop" -> Ship.stopAction(in);
                 case "repo-owners" -> repoOwners(config);
                 case "repo-create" -> repoCreate(config, in);
                 case "attach" -> attach(in);
@@ -1063,6 +1067,11 @@ public class Sessions implements Callable<Integer> {
             throw new IllegalStateException("The work changed since you looked: look at it again");
         }
         if (p.path("already").asBoolean()) throw new IllegalStateException("That's pushed already");
+        return pushAnswer(s, p, token, pr);
+    }
+
+    /** The runner's push of what the preview p showed (pr: onto that PR), with push-done's half kept on the session. */
+    static JsonNode pushAnswer(ObjectNode s, ObjectNode p, String token, int pr) throws Exception {
         ObjectNode push = JSON.createObjectNode().put("repo", s.path("repo").asText()).put("number", 0)
                 .put("slot", s.path("id").asText()).put("headRepo", p.path("headRepo").asText())
                 .put("headRef", p.path("headRef").asText()).put("to", p.path("to").asText());
@@ -1100,6 +1109,7 @@ public class Sessions implements Callable<Integer> {
         if (in.path("status").asInt() != 200) {
             String why = pushError(in.path("error").asText("It wasn't pushed"), config);
             pushed(s, to, pending, false, null, why);
+            Ship.pushed(s, to, false, why);
             save(s);
             throw new IllegalStateException(why);
         }
@@ -1131,6 +1141,7 @@ public class Sessions implements Callable<Integer> {
             else s.put("pr", open.strip());
         }
         pushed(s, to, pending, true, s.path("pr").asText(null), note);
+        Ship.pushed(s, to, true, null);
         save(s);
         ObjectNode out = JSON.createObjectNode().put("session", s.path("id").asText()).put("pushed", to)
                 .put("target", headRepo + ":" + headRef);
@@ -1343,14 +1354,8 @@ public class Sessions implements Callable<Integer> {
                 if (!it.path("pr").asBoolean() || !it.path("state").asText().equals("open")) throw new IllegalStateException("#" + number + " isn't an open PR");
                 String sha = in.path("sha").asText("");
                 if (!SHA.matcher(sha).matches() || !sha.equals(it.path("sha").asText()) || !sha.startsWith(in.path("short").asText("-"))) throw new IllegalStateException("#" + number + " changed since you looked: look again");
-                String methods = run(List.of("gh", "api", "repos/" + repo, "--jq", "[.allow_merge_commit, .allow_squash_merge, .allow_rebase_merge] | @csv"), token);
-                String[] m = methods == null ? new String[0] : methods.split(",");
-                String method = m.length == 3 ? (m[0].equals("true") ? "merge" : m[1].equals("true") ? "squash" : m[2].equals("true") ? "rebase" : null) : null;
-                if (method == null) throw new IllegalStateException(repo + " allows no merge method");
-                if (run(List.of("gh", "api", "-X", "PUT", "repos/" + repo + "/pulls/" + number + "/merge", "-f", "merge_method=" + method,
-                        "-f", "sha=" + sha, "--jq", ".merged"), token) == null) {
-                    throw new IllegalStateException("GitHub didn't merge #" + number + " (are its checks and reviews done?)");
-                }
+                String why = merge(repo, number, sha, token);
+                if (why != null) throw new IllegalStateException(why);
                 done = "merged";
             }
             default -> throw new IllegalArgumentException(kind);
@@ -1366,6 +1371,19 @@ public class Sessions implements Callable<Integer> {
         save(s);
         return JSON.createObjectNode().put("session", s.path("id").asText()).put("number", number).put("done", done)
                 .put("url", it.path("url").asText());
+    }
+
+    /** Merges PR number of repo at sha, the first way the repo allows (merge, squash, rebase): null, or why it didn't. */
+    static String merge(String repo, int number, String sha, String token) throws Exception {
+        String methods = run(List.of("gh", "api", "repos/" + repo, "--jq", "[.allow_merge_commit, .allow_squash_merge, .allow_rebase_merge] | @csv"), token);
+        String[] m = methods == null ? new String[0] : methods.split(",");
+        String method = m.length == 3 ? (m[0].equals("true") ? "merge" : m[1].equals("true") ? "squash" : m[2].equals("true") ? "rebase" : null) : null;
+        if (method == null) return repo + " allows no merge method";
+        if (run(List.of("gh", "api", "-X", "PUT", "repos/" + repo + "/pulls/" + number + "/merge", "-f", "merge_method=" + method,
+                "-f", "sha=" + sha, "--jq", ".merged"), token) == null) {
+            return "GitHub didn't merge #" + number + " (are its checks and reviews done?)";
+        }
+        return null;
     }
 
     /** What the desk's bar says about a close's comment, word for word. */
@@ -1601,6 +1619,8 @@ public class Sessions implements Callable<Integer> {
         if (!Files.exists(file(m.group(1)))) return JSON.createObjectNode().put("gone", true); // deleted meanwhile
         ObjectNode s = load(m.group(1));
         harvest(s);
+        // Review and merge: the agent's review (or fix) is done, so its fixes are pushed next, or its checks waited for.
+        Ship.turnEnded(s);
         save(s);
         // What you queued while it worked goes now, if it finished; after a stop or a failure it waits for you.
         JsonNode last = s.path("turns").path(s.path("turns").size() - 1);

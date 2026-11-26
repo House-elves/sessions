@@ -1,6 +1,15 @@
 # What's new
 
 
+## 0.22.0
+
+- New: **Review and merge** next to a session's PR, once you've pushed it. On one confirm in the desk's bar, it marks
+  the PR ready for review, has the agent review it with fresh eyes and fix what it finds, pushes its fixes to the PR,
+  and merges it once its checks pass. Failed checks go back to the agent with the end of their logs (and conflicts
+  with the base branch too), up to 3 rounds; anything else (a cancelled check, a decision the agent needs from you,
+  someone else pushing to the PR) stops it, saying why. A box above the prompt shows where it is, with stop. It goes
+  on while Sessions is open on one of your devices.
+
 ## 0.21.0
 
 - From the mvnpm elf's **Let an agent do it** on a bump: a new session on that repo, its goal written from the bump
